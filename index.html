@@ -45,6 +45,38 @@
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body { overscroll-behavior-y: contain; }
 
+/* ===== A11Y FOCUS RINGS ===== */
+:focus { outline: none; }
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.stage-chip:focus-visible,
+.tab-btn:focus-visible,
+.day-btn:focus-visible,
+.member-chip:focus-visible {
+  outline-offset: 3px;
+}
+
+/* ===== REDUCED MOTION ===== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .daisy-mark { animation: none; }
+  .now-dot { animation: none; }
+  .bg-stars { animation: none; }
+}
+
 body {
   font-family: var(--body);
   background: var(--bg-1);
@@ -435,7 +467,9 @@ main {
   cursor: pointer;
   transition: background 0.15s;
   position: relative;
+  min-height: 56px;
 }
+.set-info { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 
 .set-card:hover, .set-card:active { background: #ffffff05; }
 
@@ -517,25 +551,23 @@ main {
 .set-card[data-conflict="true"]::after {
   content: 'CONFLICT';
   position: absolute;
-  right: 50px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 48px;
+  top: 6px;
   font-family: var(--mono);
   font-size: 8px;
   color: var(--wL);
   letter-spacing: 0.1em;
-  background: #ff6b1a18;
+  background: #ff6b1a24;
+  border: 1px solid #ff6b1a40;
   padding: 2px 5px;
   border-radius: 3px;
+  pointer-events: none;
 }
 
-/* Group dots shown on schedule cards when crew members picked this set */
+/* Crew dots — sit inside .set-info, no grid-row tricks */
 .set-crew-dots {
-  grid-column: 2 / 3;
-  grid-row: 2;
   display: flex;
   gap: 3px;
-  margin-top: 4px;
   flex-wrap: wrap;
 }
 .set-crew-dots .crew-dot {
@@ -843,6 +875,14 @@ main {
 .icon-btn:active { background: #ffffff10; }
 .icon-btn svg { width: 16px; height: 16px; }
 
+/* Identity zone — join code + members read as one block */
+.group-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .join-code-pill {
   display: inline-flex;
   align-items: center;
@@ -856,10 +896,10 @@ main {
   letter-spacing: 0.18em;
   color: var(--gold);
   cursor: pointer;
-  margin-bottom: 10px;
+  align-self: flex-start;
   transition: all 0.2s;
 }
-.join-code-pill:hover { background: linear-gradient(135deg, #ffd60a28, #ff006e18); }
+.join-code-pill:hover, .join-code-pill:focus-visible { background: linear-gradient(135deg, #ffd60a28, #ff006e18); }
 .join-code-pill svg { width: 12px; height: 12px; }
 .join-code-pill .copied { color: var(--nG); }
 
@@ -867,7 +907,6 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 12px;
 }
 
 .member-chip {
@@ -1051,14 +1090,17 @@ main {
 .onboard-card {
   background: linear-gradient(180deg, #1a0a3a, #0a0518);
   border: 1px solid #ffffff22;
-  border-radius: 24px;
-  padding: 26px 24px;
+  border-radius: 22px;
+  padding: 22px 20px;
   max-width: 420px;
   width: 100%;
   box-shadow: 0 30px 80px #00000099, 0 0 80px #ff006e30;
-  max-height: 90vh;
+  max-height: calc(100dvh - 32px);
   overflow-y: auto;
   animation: pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@media (min-width: 420px) {
+  .onboard-card { padding: 26px 24px; }
 }
 @keyframes pop {
   from { opacity: 0; transform: scale(0.9) translateY(8px); }
@@ -1070,7 +1112,27 @@ main {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
+}
+
+/* Onboarding step indicator */
+.onboard-progress {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.onboard-progress .pdot {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+  background: #ffffff14;
+  transition: background 0.3s;
+}
+.onboard-progress .pdot.done { background: var(--neon-cyan); }
+.onboard-progress .pdot.active {
+  background: linear-gradient(90deg, var(--neon-pink), var(--neon-cyan));
+  box-shadow: 0 0 8px var(--neon-pink);
 }
 .onboard-hero .daisy-mark { width: 56px; height: 56px; margin-bottom: 10px; }
 .onboard-hero h1 {
@@ -1861,8 +1923,8 @@ main {
       <div class="hero-title">EDC LV 26</div>
       <div class="hero-sub">30 Years · Under the Electric Sky</div>
     </div>
-    <button class="user-chip" id="userChip" style="display:none">
-      <span class="uavatar" id="userAvatar">?</span>
+    <button class="user-chip" id="userChip" style="display:none" aria-label="Change your name">
+      <span class="uavatar" id="userAvatar" aria-hidden="true">?</span>
       <span id="userChipText">YOU</span>
     </button>
   </div>
@@ -2072,7 +2134,7 @@ main {
 </nav>
 
 <!-- ============ GROUP EDIT MODAL ============ -->
-<div class="modal-bg" id="groupModal">
+<div class="modal-bg" id="groupModal" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
   <div class="modal">
     <h2 id="groupModalTitle">New Group</h2>
     <div class="field">
@@ -2091,7 +2153,7 @@ main {
 </div>
 
 <!-- ============ ONBOARDING ============ -->
-<div class="onboard-bg" id="onboardBg">
+<div class="onboard-bg" id="onboardBg" role="dialog" aria-modal="true" aria-label="Welcome to EDC LV 26">
   <div class="onboard-card">
     <div class="onboard-hero">
       <svg class="daisy-mark" viewBox="0 0 100 100">
@@ -2114,16 +2176,22 @@ main {
       <div class="sub">30 Years · Under the Electric Sky</div>
     </div>
 
+    <div class="onboard-progress" id="onboardProgress" aria-hidden="true">
+      <span class="pdot active"></span>
+      <span class="pdot"></span>
+      <span class="pdot"></span>
+    </div>
+
     <!-- Step 1: Name -->
     <div class="onboard-step active" data-step="name">
-      <div class="onboard-prompt">What's your <span class="accent">name</span>, raver?</div>
+      <div class="onboard-prompt">What should we <span class="accent">call you?</span></div>
       <div class="field">
-        <label>So your crew knows it's you</label>
-        <input type="text" id="onboardNameInput" placeholder="Your name or handle" maxlength="32" autocomplete="off">
+        <label for="onboardNameInput">So your crew knows it's you</label>
+        <input type="text" id="onboardNameInput" placeholder="Your name or handle" maxlength="32" autocomplete="given-name" enterkeyhint="next" inputmode="text">
       </div>
       <button class="btn-primary" id="onboardNameNext" style="width:100%;justify-content:center" disabled>
         CONTINUE
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
       </button>
     </div>
 
@@ -2133,32 +2201,32 @@ main {
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         BACK
       </button>
-      <div class="onboard-prompt"><span id="choiceGreeting">Welcome</span> · Find your <span class="accent">crew</span></div>
+      <div class="onboard-prompt"><span id="choiceGreeting">Welcome</span> · <span class="accent">Find your crew</span></div>
 
-      <button class="onboard-choice" id="choiceCreate">
-        <div class="icon">
+      <button class="onboard-choice" id="choiceCreate" type="button">
+        <div class="icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         </div>
         <div class="text">
-          <div class="title">Create a Crew</div>
-          <div class="desc">Start a new group. Get a join code to share with your people.</div>
+          <div class="title">Start a Crew</div>
+          <div class="desc">Make a new group and share the code with your people.</div>
         </div>
-        <span class="chev">›</span>
+        <span class="chev" aria-hidden="true">›</span>
       </button>
 
-      <button class="onboard-choice alt" id="choiceJoin">
-        <div class="icon">
+      <button class="onboard-choice alt" id="choiceJoin" type="button">
+        <div class="icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/></svg>
         </div>
         <div class="text">
           <div class="title">Join a Crew</div>
-          <div class="desc">Enter a code or pick from existing crews.</div>
+          <div class="desc">Enter a code or pick from active crews.</div>
         </div>
-        <span class="chev">›</span>
+        <span class="chev" aria-hidden="true">›</span>
       </button>
 
       <div style="text-align:center;margin-top:14px">
-        <button class="btn-ghost" id="skipCrew">SKIP FOR NOW</button>
+        <button class="btn-ghost" id="skipCrew" type="button">SKIP — DO IT LATER</button>
       </div>
     </div>
 
@@ -2213,7 +2281,7 @@ main {
   </div>
 </div>
 
-<div class="toast" id="toast">Saved</div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true">Saved</div>
 
 <!-- Supabase client -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>

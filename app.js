@@ -623,15 +623,38 @@ function rerenderAll() {
 }
 
 // ===== ONBOARDING =====
+const STEP_PROGRESS = { name: 0, choice: 1, create: 1, join: 1, share: 2 };
+
+function updateOnboardProgress(step) {
+  const idx = STEP_PROGRESS[step] ?? 0;
+  document.querySelectorAll('#onboardProgress .pdot').forEach((d, i) => {
+    d.classList.toggle('active', i === idx);
+    d.classList.toggle('done', i < idx);
+  });
+  // Hide progress entirely when triggered from in-app join (no name step)
+  const prog = document.getElementById('onboardProgress');
+  if (prog) prog.style.display = state._joinFromApp ? 'none' : '';
+}
+
+function focusFirst(step) {
+  setTimeout(() => {
+    const stepEl = document.querySelector(`.onboard-step[data-step="${step}"]`);
+    if (!stepEl) return;
+    const target = stepEl.querySelector('input:not([disabled]), button:not([disabled])');
+    target?.focus({ preventScroll: true });
+  }, 60);
+}
+
 function showOnboard(step) {
   const bg = document.getElementById('onboardBg');
   bg.classList.add('show');
   document.querySelectorAll('.onboard-step').forEach(s => s.classList.toggle('active', s.dataset.step === step));
+  updateOnboardProgress(step);
   if (step === 'choice') {
     document.getElementById('choiceGreeting').textContent = `Hey ${state.user.name}`;
   }
   if (step === 'join') {
-    document.getElementById('joinList').innerHTML = '<div class="join-list-empty">Loading crews...</div>';
+    document.getElementById('joinList').innerHTML = '<div class="join-list-empty">Loading crews…</div>';
     fetchAllGroups().then(renderJoinList);
   }
   if (step === 'create') {
@@ -639,9 +662,11 @@ function showOnboard(step) {
     document.getElementById('createNameInput').value = '';
     document.getElementById('createSubmit').disabled = true;
   }
+  focusFirst(step);
 }
 function hideOnboard() {
   document.getElementById('onboardBg').classList.remove('show');
+  state._joinFromApp = false;
 }
 
 function renderCreateSwatches() {
@@ -691,7 +716,10 @@ function wireOnboarding() {
   });
 
   document.querySelectorAll('[data-back]').forEach(btn => {
-    btn.addEventListener('click', () => showOnboard(btn.dataset.back));
+    btn.addEventListener('click', () => {
+      if (state._joinFromApp) { hideOnboard(); return; }
+      showOnboard(btn.dataset.back);
+    });
   });
 
   document.getElementById('choiceCreate').addEventListener('click', () => showOnboard('create'));
@@ -707,6 +735,9 @@ function wireOnboarding() {
   const createSwatchesEl = document.getElementById('createSwatches');
   createName.addEventListener('input', () => {
     createSubmit.disabled = createName.value.trim().length < 1;
+  });
+  createName.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !createSubmit.disabled) createSubmit.click();
   });
   createSwatchesEl.addEventListener('click', (e) => {
     const sw = e.target.closest('.swatch');
@@ -848,13 +879,16 @@ function renderSetCard(day, stage, set, now, isToday) {
   if (headliner) classes += ' is-headliner';
   if (ceremony) classes += ' is-ceremony';
 
+  const aria = `${isPicked ? 'Remove' : 'Add'} ${artist} from your picks`;
   return `<div class="${classes}" data-picked="${isPicked}" data-conflict="${conflict}" data-id="${id}">
     <div class="set-time">${start}<span class="end">${end}</span></div>
-    <div class="set-artist">${escapeHtml(artist)}${tag ? `<span class="set-tag">${escapeHtml(tag)}</span>` : ''}</div>
-    <button class="star-btn" data-action="star" data-id="${id}" aria-label="Pick this set">
-      <svg viewBox="0 0 24 24" fill="${isPicked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
+    <div class="set-info">
+      <div class="set-artist">${escapeHtml(artist)}${tag ? `<span class="set-tag">${escapeHtml(tag)}</span>` : ''}</div>
+      ${crewDots ? `<div class="set-crew-dots" aria-label="Crews who picked this set">${crewDots}</div>` : ''}
+    </div>
+    <button class="star-btn" data-action="star" data-id="${id}" aria-label="${escapeHtml(aria)}" aria-pressed="${isPicked}">
+      <svg viewBox="0 0 24 24" fill="${isPicked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
     </button>
-    ${crewDots ? `<div class="set-crew-dots">${crewDots}</div>` : ''}
   </div>`;
 }
 
@@ -982,12 +1016,14 @@ function renderGroups() {
           </button>
         </div>
       </div>
-      <button class="join-code-pill" data-action="copy-code" data-code="${escapeHtml(g.join_code)}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        ${escapeHtml(g.join_code)}
-      </button>
-      <div class="group-members">
-        ${g.members.map(m => `<div class="member-chip ${m.name === state.user?.name ? 'is-me' : ''}"><div class="mdot"></div>${escapeHtml(m.name)}</div>`).join('')}
+      <div class="group-identity">
+        <button class="join-code-pill" data-action="copy-code" data-code="${escapeHtml(g.join_code)}" aria-label="Copy join code ${escapeHtml(g.join_code)}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          ${escapeHtml(g.join_code)}
+        </button>
+        <div class="group-members">
+          ${g.members.map(m => `<div class="member-chip ${m.name === state.user?.name ? 'is-me' : ''}"><div class="mdot" aria-hidden="true"></div>${escapeHtml(m.name)}</div>`).join('')}
+        </div>
       </div>
       <div class="group-meeting">
         <div class="group-meeting-label">Meeting Spot</div>
@@ -1053,8 +1089,8 @@ async function saveGroupFromModal() {
 
 // ===== JOIN OTHERS DIALOG (from Groups tab) =====
 function showJoinDialog() {
+  state._joinFromApp = true;
   showOnboard('join');
-  // Pre-hide back button in standalone join flow? Keep simple: reuses onboard, hide hero context
 }
 
 // ===== ROUTES =====
@@ -1477,6 +1513,18 @@ function wireEvents() {
   });
 
   document.getElementById('userChip').addEventListener('click', changeName);
+
+  // Global Escape: close any open modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const groupModal = document.getElementById('groupModal');
+    if (groupModal.classList.contains('show')) { hideGroupModal(); return; }
+    const onboard = document.getElementById('onboardBg');
+    if (onboard.classList.contains('show') && state.user) {
+      // Only allow Escape after name is set (don't trap user, but don't let them skip naming)
+      if (state._joinFromApp) { hideOnboard(); return; }
+    }
+  });
 }
 
 // ===== INIT =====
