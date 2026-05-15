@@ -1,0 +1,20 @@
+{
+  "name": "EDC LV 2026 Planner",
+  "short_name": "EDC LV 26",
+  "description": "Schedule, picks, crews, and route planning for EDC Las Vegas 2026",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0518",
+  "theme_color": "#0a0518",
+  "categories": ["entertainment", "lifestyle", "music"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
