@@ -503,6 +503,191 @@ function genJoinCode() {
   return s;
 }
 
+// ===== LIVE PLANNER (Up Next + LEAVE NOW + Festival Countdown + Reminders) =====
+
+function festivalStatus() {
+  const day = todayDay();
+  const now = nowMinutes();
+  const dayData = SCHEDULE[day];
+  if (!dayData) return { state: 'over' };
+  let firstStart = Infinity, lastEnd = 0;
+  for (const stage of STAGE_ORDER) {
+    for (const s of (dayData[stage] || [])) {
+      firstStart = Math.min(firstStart, timeToMinutes(s[0]));
+      lastEnd = Math.max(lastEnd, timeToMinutes(s[1]));
+    }
+  }
+  if (now < firstStart) return { state: 'pre', day, mins: firstStart - now };
+  if (now < lastEnd) return { state: 'live', day, mins: lastEnd - now };
+  return { state: 'over', day };
+}
+
+function formatCountdown(mins) {
+  if (mins <= 0) return 'NOW';
+  if (mins < 1) return '<1M';
+  if (mins < 60) return `${Math.floor(mins)}M`;
+  const h = Math.floor(mins / 60), m = Math.floor(mins % 60);
+  return m === 0 ? `${h}H` : `${h}H ${m}M`;
+}
+
+function findRouteMin(fromStage, toStage) {
+  if (!fromStage || !toStage || fromStage === toStage) return 0;
+  const r = ROUTES.find(r => (r[0] === fromStage && r[1] === toStage) || (r[0] === toStage && r[1] === fromStage));
+  return r ? r[2] : null;
+}
+
+function getTodayPickContext() {
+  const day = todayDay();
+  const now = nowMinutes();
+  const picks = getAllPicks()
+    .filter(p => p.day === day && !isCeremony(p.artist))
+    .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+  const current = picks.find(p => {
+    const s = timeToMinutes(p.start), e = timeToMinutes(p.end);
+    return now >= s && now < e;
+  });
+  const upcoming = picks.filter(p => timeToMinutes(p.start) > now);
+  return { day, now, picks, current, upcoming };
+}
+
+function renderUpNext() {
+  const bar = document.getElementById('upnextBar');
+  const stripEl = document.getElementById('upnextStrip');
+  const statusEl = document.getElementById('upnextStatus');
+  if (!bar || !stripEl || !statusEl) return;
+
+  // Only show after onboarding completes
+  if (!state.user?.name) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+
+  const { day, now, current, upcoming } = getTodayPickContext();
+  const fs = festivalStatus();
+
+  // --- Status line ---
+  const dayLabel = { 1: 'NIGHT 1', 2: 'NIGHT 2', 3: 'NIGHT 3' }[day] || 'EDC LV 26';
+  let statusHtml = '';
+  if (fs.state === 'pre') {
+    statusHtml = `<span class="ftv-state">DOORS IN ${formatCountdown(fs.mins)}</span><span class="ftv-sep">·</span><span>${dayLabel} · FRI 5/15</span>`;
+  } else if (fs.state === 'live') {
+    statusHtml = `<span class="live-dot"></span><span class="ftv-state">${dayLabel} LIVE</span><span class="ftv-sep">·</span><span>WRAPS IN ${formatCountdown(fs.mins)}</span>`;
+  } else {
+    statusHtml = `<span class="ftv-state">EDC 26 · WRAPPED</span>`;
+  }
+  // Reminder CTA (only if user has picks today and hasn't already enabled or denied)
+  if (state.notifyPref === undefined && (current || upcoming.length > 0) && 'Notification' in window && Notification.permission === 'default') {
+    statusHtml += `<button class="ftv-cta" data-action="enable-reminders" type="button">🔔 REMIND ME</button>`;
+  }
+  statusEl.innerHTML = statusHtml;
+
+  // --- Cells ---
+  if (!current && !upcoming.length) {
+    if (fs.state === 'over') {
+      stripEl.innerHTML = `<div class="upnext-empty"><span class="ue-big">EDC 26 IS A WRAP</span>See you in 2027.</div>`;
+    } else if (fs.state === 'pre') {
+      stripEl.innerHTML = `<div class="upnext-empty"><span class="ue-big">NO PICKS YET</span>Tap a daisy on Schedule to plan your night</div>`;
+    } else {
+      stripEl.innerHTML = `<div class="upnext-empty"><span class="ue-big">NOTHING QUEUED TONIGHT</span>Open Schedule & tap a daisy to pick a set</div>`;
+    }
+    return;
+  }
+
+  const cells = [];
+  let prevStage = null;
+  if (current) {
+    const remaining = Math.max(0, timeToMinutes(current.end) - now);
+    cells.push({ kind: 'now', pick: current, label: `${formatCountdown(remaining)} LEFT`, walkFrom: null });
+    prevStage = current.stage;
+  }
+  for (let i = 0; i < Math.min(2, upcoming.length); i++) {
+    const p = upcoming[i];
+    const startsIn = timeToMinutes(p.start) - now;
+    const walk = prevStage ? findRouteMin(prevStage, p.stage) : null;
+    // LEAVE NOW: if next pick starts in ≤ walk + 3min buffer, flag it
+    const buffer = 3;
+    const leaveNow = walk != null && walk > 0 && startsIn <= (walk + buffer);
+    cells.push({
+      kind: i === 0 ? 'next' : 'then',
+      tag: i === 0 ? 'UP NEXT' : 'THEN',
+      pick: p,
+      label: formatCountdown(startsIn),
+      walkFrom: walk,
+      leaveNow,
+      startsIn,
+    });
+    prevStage = p.stage;
+  }
+
+  stripEl.innerHTML = cells.map((c, i) => {
+    const meta = STAGES[c.pick.stage];
+    const tag = c.kind === 'now' ? 'NOW PLAYING' : c.tag;
+    const cellClass = `upnext-cell ${c.kind === 'now' ? 'now' : ''} ${c.leaveNow ? 'leave-now' : ''}`.trim();
+    const finalTag = c.leaveNow ? '🚶 LEAVE NOW' : tag;
+    const walkHtml = i > 0 && c.walkFrom != null && c.walkFrom > 0
+      ? `<span class="upnext-walk ${c.leaveNow ? 'tight' : ''}">→ ${c.walkFrom}M</span>`
+      : '';
+    return `${walkHtml}<button class="${cellClass}" data-action="jump-pick" data-id="${c.pick.id}" style="--stage-color:${meta.color}" aria-label="${escapeHtml(finalTag)}: ${escapeHtml(c.pick.artist)} at ${meta.name}, ${c.label}">
+      <div class="upnext-tag">${finalTag}</div>
+      <div class="upnext-artist">${escapeHtml(c.pick.artist)}</div>
+      <div class="upnext-meta">
+        <span class="upnext-stage">${meta.name}</span>
+        <span class="upnext-countdown">${c.label}</span>
+      </div>
+    </button>`;
+  }).join('');
+}
+
+// ===== REMINDERS =====
+function requestReminders() {
+  if (!('Notification' in window)) { toast('Reminders not supported here', 'err'); return; }
+  if (Notification.permission === 'granted') {
+    state.notifyPref = 'granted'; saveLocal(); toast('Reminders on'); renderUpNext(); return;
+  }
+  if (Notification.permission === 'denied') {
+    toast('Notifications blocked in browser', 'err'); state.notifyPref = 'denied'; saveLocal(); return;
+  }
+  Notification.requestPermission().then(result => {
+    state.notifyPref = result;
+    saveLocal();
+    if (result === 'granted') {
+      toast('Reminders on');
+      // Send a confirmation notification so the user sees what they'll look like
+      new Notification('EDC LV 26 reminders enabled', { body: "You'll get a heads-up 10 minutes before each of your picks.", icon: '/icon.svg' });
+    } else {
+      toast('No worries — you can enable later');
+    }
+    renderUpNext();
+  });
+}
+
+function checkReminders() {
+  if (state.notifyPref !== 'granted') return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!state.notified) state.notified = {};
+  const { upcoming } = getTodayPickContext();
+  const now = nowMinutes();
+  let dirty = false;
+  for (const p of upcoming) {
+    const startsIn = timeToMinutes(p.start) - now;
+    // Fire when set is starting in 9–11 min window (covers 60s tick latency)
+    if (startsIn >= 9 && startsIn <= 11 && !state.notified[p.id]) {
+      const meta = STAGES[p.stage];
+      try {
+        new Notification(`${p.artist} in 10 min`, {
+          body: `${meta.name} · starts ${p.start}`,
+          icon: '/icon.svg',
+          tag: p.id,
+        });
+        state.notified[p.id] = Date.now();
+        dirty = true;
+      } catch (_) {}
+    }
+  }
+  // Garbage-collect old notified entries (>24h)
+  const cutoff = Date.now() - 86400000;
+  for (const k in state.notified) if (state.notified[k] < cutoff) { delete state.notified[k]; dirty = true; }
+  if (dirty) saveLocal();
+}
+
 // ===== TOAST =====
 let toastTimer;
 function toast(msg, type) {
@@ -693,6 +878,26 @@ function rerenderAll() {
   if (state.currentTab === 'picks') renderPicks();
   if (state.currentTab === 'groups') renderGroups();
   if (state.currentTab === 'routes') renderRoutes();
+  renderUpNext();
+}
+
+// Jump from up-next cell into the Schedule tab at that pick's day, scroll-into-view
+function jumpToPickInSchedule(setId) {
+  const m = setId.match(/^d(\d+)-/);
+  if (!m) return;
+  const day = parseInt(m[1]);
+  switchTab('schedule');
+  if (state.currentDay !== day) setDay(day);
+  // Defer until DOM is laid out
+  setTimeout(() => {
+    const card = document.querySelector(`.set-card[data-id="${setId}"]`);
+    if (card) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.style.transition = 'box-shadow 0.4s';
+      card.style.boxShadow = '0 0 0 2px var(--neon-cyan), 0 0 20px #00f5ff60';
+      setTimeout(() => { card.style.boxShadow = ''; }, 1400);
+    }
+  }, 80);
 }
 
 // Refresh when tab becomes visible again
@@ -1650,14 +1855,13 @@ function toggleStage(stage) {
 function togglePick(id) {
   const picked = !state.picks[id];
   if (picked) state.picks[id] = true; else delete state.picks[id];
+  // When unpicked, clear any cached notify state so a future pick can re-fire
+  if (!picked && state.notified?.[id]) { delete state.notified[id]; }
   saveLocal();
   renderSchedule();
+  renderUpNext();
   if (state.currentTab === 'picks') renderPicks();
-  // Auto-broadcast to crews (best-effort, doesn't block UI)
-  syncPickToCrews(id, picked).then(() => {
-    // Refresh local cache so Compare view reflects new state
-    return fetchMyGroups();
-  }).then(() => {
+  syncPickToCrews(id, picked).then(() => fetchMyGroups()).then(() => {
     if (state.currentTab === 'groups') renderGroups();
     if (state.currentTab === 'schedule') renderSchedule();
   }).catch(err => console.warn('crew sync failed', err));
@@ -1694,6 +1898,14 @@ function wireEvents() {
     }
     if (a === 'refresh-groups') {
       manualRefresh();
+      return;
+    }
+    if (a === 'jump-pick') {
+      jumpToPickInSchedule(t.dataset.id);
+      return;
+    }
+    if (a === 'enable-reminders') {
+      requestReminders();
       return;
     }
   });
@@ -1757,6 +1969,9 @@ function bootstrap() {
   });
 
   setInterval(() => { if (state.currentTab === 'schedule') renderSchedule(); }, 60000);
+  // Live planner refresh: 30s tick for up-next countdowns + reminder check
+  renderUpNext();
+  setInterval(() => { renderUpNext(); checkReminders(); }, 30000);
 
   if (!state.user || !state.user.name) {
     showOnboard('name');

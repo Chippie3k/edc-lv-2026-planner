@@ -242,6 +242,198 @@ header {
   color: #0a0518;
 }
 
+/* ===== UP NEXT / LIVE PLANNER BAR ===== */
+.upnext-bar {
+  margin-top: 12px;
+}
+.upnext-status {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--ink-dim);
+  margin-bottom: 6px;
+  padding: 0 2px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 12px;
+}
+.upnext-status .live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--neon-pink);
+  box-shadow: 0 0 6px var(--neon-pink);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.upnext-status .ftv-state { color: var(--ink); font-weight: 600; }
+.upnext-status .ftv-sep { color: var(--ink-mute); margin: 0 4px; }
+.upnext-status .ftv-cta {
+  background: transparent;
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  padding: 3px 8px;
+  border-radius: 100px;
+  margin-left: auto;
+  cursor: pointer;
+}
+.upnext-status .ftv-cta:hover { background: var(--gold); color: #0a0518; }
+
+.upnext-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+  margin: 0 -2px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.upnext-strip::-webkit-scrollbar { display: none; }
+
+.upnext-cell {
+  flex: 0 0 220px;
+  scroll-snap-align: start;
+  background: linear-gradient(135deg, #ffffff10, #ffffff03);
+  border: 1px solid #ffffff18;
+  border-left: 3px solid var(--stage-color, var(--ink-mute));
+  border-radius: 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  text-align: left;
+  position: relative;
+  transition: transform 0.15s, background 0.2s;
+  min-width: 0;
+}
+.upnext-cell:active { transform: scale(0.98); }
+.upnext-cell.now {
+  background: linear-gradient(135deg, #ff006e28, #ff006e08);
+  border-color: var(--neon-pink);
+  border-left-color: var(--neon-pink);
+}
+.upnext-cell.leave-now {
+  background: linear-gradient(135deg, #ff6b1a38, #ff006e15);
+  border-color: var(--wL);
+  animation: leaveNowPulse 1.6s ease-in-out infinite;
+}
+@keyframes leaveNowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 #ff6b1a60; }
+  50% { box-shadow: 0 0 0 6px #ff6b1a00; }
+}
+
+.upnext-tag {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: var(--ink-mute);
+  letter-spacing: 0.2em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.upnext-cell.now .upnext-tag { color: var(--neon-pink); }
+.upnext-cell.now .upnext-tag::before {
+  content: '';
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--neon-pink);
+  box-shadow: 0 0 5px var(--neon-pink);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.upnext-cell.leave-now .upnext-tag {
+  color: var(--wL);
+  font-weight: 700;
+}
+
+.upnext-artist {
+  font-family: var(--head);
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink);
+  line-height: 1.15;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upnext-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.upnext-stage {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--stage-color, var(--ink-mute));
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.upnext-countdown {
+  font-family: var(--display);
+  font-size: 13px;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.upnext-cell.now .upnext-countdown { color: var(--daisy); }
+.upnext-cell.leave-now .upnext-countdown { color: var(--wL); }
+
+.upnext-walk {
+  flex: 0 0 auto;
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  text-transform: uppercase;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.upnext-walk.tight { color: var(--wL); font-weight: 700; }
+
+.upnext-empty {
+  flex: 1;
+  background: linear-gradient(135deg, #ffffff06, #ffffff02);
+  border: 1px dashed #ffffff14;
+  border-radius: 12px;
+  padding: 10px 14px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.upnext-empty .ue-big {
+  display: block;
+  font-family: var(--display);
+  font-size: 13px;
+  color: var(--ink);
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+@media (min-width: 700px) {
+  .upnext-cell { flex: 1 1 0; min-width: 200px; }
+  .upnext-strip { overflow-x: visible; scroll-snap-type: none; }
+}
+
 /* ===== TAB NAV ===== */
 .tabs {
   position: fixed;
@@ -2202,6 +2394,10 @@ main {
       <span class="uavatar" id="userAvatar" aria-hidden="true">?</span>
       <span id="userChipText">YOU</span>
     </button>
+  </div>
+  <div class="upnext-bar" id="upnextBar" style="display:none">
+    <div class="upnext-status" id="upnextStatus"></div>
+    <div class="upnext-strip" id="upnextStrip" role="region" aria-label="What's next in your picks"></div>
   </div>
 </header>
 
