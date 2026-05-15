@@ -544,6 +544,15 @@ async function fetchMyGroups() {
   return groups;
 }
 
+async function pushMyPicksToGroup(groupId) {
+  const setIds = Object.keys(state.picks || {});
+  if (!setIds.length || !state.user?.name) return;
+  const rows = setIds.map(set_id => ({ group_id: groupId, set_id, added_by: state.user.name }));
+  // Use upsert to ignore duplicates (member might have already shared these)
+  const { error } = await sb.from('edc_group_picks').upsert(rows, { onConflict: 'group_id,set_id,added_by', ignoreDuplicates: true });
+  if (error) console.warn('seed crew picks failed', error);
+}
+
 async function createGroup(name, color) {
   let attempts = 0;
   while (attempts < 4) {
@@ -552,13 +561,14 @@ async function createGroup(name, color) {
       name, color, join_code: code, created_by: state.user?.name || null,
     }).select().single();
     if (!error) {
-      // Auto-add creator as member
       await sb.from('edc_group_members').insert({ group_id: data.id, name: state.user.name });
       state.myGroupIds = [...new Set([...state.myGroupIds, data.id])];
       saveLocal();
+      // Push creator's existing picks into the new crew so Compare shows them immediately
+      await pushMyPicksToGroup(data.id);
       return data;
     }
-    if (error.code === '23505') { attempts++; continue; } // unique conflict, retry code
+    if (error.code === '23505') { attempts++; continue; }
     throw error;
   }
   throw new Error('Could not generate unique join code, try again');
@@ -568,9 +578,11 @@ async function joinGroupById(groupId) {
   const { data: g } = await sb.from('edc_groups').select('*').eq('id', groupId).single();
   if (!g) throw new Error('Crew not found');
   const { error } = await sb.from('edc_group_members').insert({ group_id: g.id, name: state.user.name });
-  if (error && error.code !== '23505') throw error; // 23505 = already a member, that's fine
+  if (error && error.code !== '23505') throw error;
   state.myGroupIds = [...new Set([...state.myGroupIds, g.id])];
   saveLocal();
+  // Seed the crew with the new member's existing picks so Compare lights up right away
+  await pushMyPicksToGroup(g.id);
   return g;
 }
 
@@ -585,7 +597,11 @@ async function joinGroupByCode(code) {
 
 async function leaveGroup(groupId) {
   if (!state.user?.name) return;
-  await sb.from('edc_group_members').delete().eq('group_id', groupId).eq('name', state.user.name);
+  // Clean up: remove user's picks from this crew along with membership
+  await Promise.all([
+    sb.from('edc_group_members').delete().eq('group_id', groupId).eq('name', state.user.name),
+    sb.from('edc_group_picks').delete().eq('group_id', groupId).eq('added_by', state.user.name),
+  ]);
   state.myGroupIds = state.myGroupIds.filter(id => id !== groupId);
   saveLocal();
 }
@@ -595,24 +611,81 @@ async function updateGroup(id, patch) {
 }
 
 async function toggleGroupPick(groupId, setId) {
+  if (!state.user?.name) return;
   const g = state.groups.find(g => g.id === groupId);
-  const existing = g?.picks?.find(p => p.set_id === setId);
+  const existing = g?.picks?.find(p => p.set_id === setId && p.added_by === state.user.name);
   if (existing) {
     await sb.from('edc_group_picks').delete().eq('id', existing.id);
   } else {
-    await sb.from('edc_group_picks').insert({ group_id: groupId, set_id: setId, added_by: state.user?.name || null });
+    await sb.from('edc_group_picks').insert({ group_id: groupId, set_id: setId, added_by: state.user.name });
   }
 }
 
-// ===== REALTIME =====
+// Sync a personal pick to every crew the user is in (best-effort, parallel)
+async function syncPickToCrews(setId, picked) {
+  if (!state.user?.name || !state.groups.length) return;
+  const member = state.user.name;
+  await Promise.allSettled(state.groups.map(async g => {
+    if (picked) {
+      const { error } = await sb.from('edc_group_picks').insert({ group_id: g.id, set_id: setId, added_by: member });
+      // 23505 = unique violation = already there, ignore
+      if (error && error.code !== '23505') console.warn('crew-pick insert failed', g.id, error);
+    } else {
+      await sb.from('edc_group_picks').delete().eq('group_id', g.id).eq('set_id', setId).eq('added_by', member);
+    }
+  }));
+}
+
+// ===== REALTIME + POLL FALLBACK =====
 let realtimeChannel = null;
+let realtimeStatus = 'idle'; // idle | subscribing | connected | error
+let pollTimer = null;
+
 function setupRealtime() {
-  if (realtimeChannel) { sb.removeChannel(realtimeChannel); realtimeChannel = null; }
+  if (realtimeChannel) {
+    try { sb.removeChannel(realtimeChannel); } catch(_) {}
+    realtimeChannel = null;
+  }
+  realtimeStatus = 'subscribing';
+  const onChange = () => fetchMyGroups().then(rerenderAll).catch(e => console.warn('refresh failed', e));
   realtimeChannel = sb.channel('edc-public')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_groups' }, () => { fetchMyGroups().then(rerenderAll); })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_members' }, () => { fetchMyGroups().then(rerenderAll); })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_picks' }, () => { fetchMyGroups().then(rerenderAll); })
-    .subscribe();
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_groups' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_members' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_picks' }, onChange)
+    .subscribe((status, err) => {
+      realtimeStatus = status === 'SUBSCRIBED' ? 'connected' : (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' ? 'error' : status.toLowerCase());
+      if (err) console.warn('realtime error:', err);
+      updateSyncIndicator();
+    });
+  startPolling();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (!state.myGroupIds.length) return;
+    fetchMyGroups().then(rerenderAll).catch(() => {});
+  }, 18000);
+}
+
+function manualRefresh() {
+  const btn = document.getElementById('refreshGroupsBtn');
+  if (btn) btn.classList.add('spinning');
+  fetchMyGroups().then(() => {
+    rerenderAll();
+    toast('Synced');
+  }).catch(() => {
+    toast('Sync failed', 'err');
+  }).finally(() => {
+    setTimeout(() => btn?.classList.remove('spinning'), 400);
+  });
+}
+
+function updateSyncIndicator() {
+  const el = document.getElementById('refreshGroupsBtn');
+  if (!el) return;
+  el.dataset.status = realtimeStatus;
 }
 
 function rerenderAll() {
@@ -621,6 +694,16 @@ function rerenderAll() {
   if (state.currentTab === 'groups') renderGroups();
   if (state.currentTab === 'routes') renderRoutes();
 }
+
+// Refresh when tab becomes visible again
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.myGroupIds.length) {
+    fetchMyGroups().then(rerenderAll).catch(() => {});
+  }
+});
+window.addEventListener('online', () => {
+  if (state.myGroupIds.length) fetchMyGroups().then(rerenderAll).catch(() => {});
+});
 
 // ===== ONBOARDING =====
 const STEP_PROGRESS = { name: 0, choice: 1, create: 1, join: 1, share: 2 };
@@ -988,6 +1071,103 @@ function renderPicks() {
 }
 
 // ===== GROUPS =====
+
+// Stable per-member color: hash name → palette index
+const MEMBER_PALETTE = ['#ff006e','#00f5ff','#39ff14','#ffd60a','#a020f0','#ff9ed8','#ff6b1a','#7dc14b','#6ec1ff','#c724b1','#b8b8ff','#ff3864'];
+function memberColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return MEMBER_PALETTE[Math.abs(h) % MEMBER_PALETTE.length];
+}
+
+// Build comparison data for a single crew
+function buildCompareData(group) {
+  const currentMembers = new Set(group.members.map(m => m.name));
+  // Map setId -> [member names who picked it] — current members only
+  const setMembers = new Map();
+  for (const p of (group.picks || [])) {
+    if (!currentMembers.has(p.added_by)) continue;
+    if (!setMembers.has(p.set_id)) setMembers.set(p.set_id, new Set());
+    setMembers.get(p.set_id).add(p.added_by);
+  }
+
+  // Resolve each set_id back to its actual set info
+  const rows = [];
+  for (const [setId, memberSet] of setMembers) {
+    const m = setId.match(/^d(\d+)-([^-]+)-(.+)$/);
+    if (!m) continue;
+    const day = parseInt(m[1]);
+    const stage = m[2];
+    const start = m[3];
+    const set = (SCHEDULE[day]?.[stage] || []).find(s => s[0] === start);
+    if (!set) continue;
+    rows.push({
+      setId, day, stage,
+      start: set[0], end: set[1], artist: set[2], tag: set[3],
+      members: [...memberSet],
+    });
+  }
+
+  rows.sort((a, b) => a.day - b.day || timeToMinutes(a.start) - timeToMinutes(b.start));
+
+  // Detect time-conflicts WITHIN the same member: same person, overlapping intervals on same day
+  // Detect group-disagreements: same time window, different members at different stages
+  const byDay = { 1: [], 2: [], 3: [] };
+  rows.forEach(r => byDay[r.day].push(r));
+
+  const allMembers = group.members.map(m => m.name);
+  return { rows, byDay, allMembers };
+}
+
+function renderCompareForGroup(g) {
+  const data = buildCompareData(g);
+  if (!data.rows.length) {
+    return `<div class="compare-empty">Nobody's picked any sets yet. Tap the daisy on any set in Schedule to share it with your crew.</div>`;
+  }
+  const memberCount = data.allMembers.length;
+  const dayLabels = { 1: 'FRI · 5/15', 2: 'SAT · 5/16', 3: 'SUN · 5/17' };
+
+  // Stats
+  const overlapping = data.rows.filter(r => r.members.length >= 2 && r.members.length === memberCount).length;
+  const partial = data.rows.filter(r => r.members.length >= 2 && r.members.length < memberCount).length;
+  const solo = data.rows.filter(r => r.members.length === 1).length;
+
+  let html = `<div class="compare-stats">
+    <div class="compare-stat all"><div class="cs-num">${overlapping}</div><div class="cs-lbl">FULL CREW</div></div>
+    <div class="compare-stat some"><div class="cs-num">${partial}</div><div class="cs-lbl">PARTIAL</div></div>
+    <div class="compare-stat one"><div class="cs-num">${solo}</div><div class="cs-lbl">SOLO</div></div>
+  </div>`;
+
+  // Legend: who's who
+  html += `<div class="compare-legend">${data.allMembers.map(n => `<span class="compare-legend-chip"><span class="cl-dot" style="background:${memberColor(n)}"></span>${escapeHtml(n)}</span>`).join('')}</div>`;
+
+  for (const d of [1, 2, 3]) {
+    const dayRows = data.byDay[d];
+    if (!dayRows.length) continue;
+    html += `<div class="compare-day"><div class="compare-day-head">${dayLabels[d]}</div>`;
+    html += dayRows.map(r => {
+      const meta = STAGES[r.stage];
+      const fullCrew = r.members.length === memberCount && memberCount > 1;
+      const partial = r.members.length >= 2 && !fullCrew;
+      const dots = data.allMembers.map(name => {
+        const picked = r.members.includes(name);
+        return `<span class="compare-dot ${picked ? 'on' : 'off'}" style="${picked ? `background:${memberColor(name)};color:#0a0518;border-color:#0a0518` : ''}" title="${escapeHtml(name)}${picked ? '' : ' — not picked'}">${escapeHtml((name[0] || '?').toUpperCase())}</span>`;
+      }).join('');
+      return `<div class="compare-row ${fullCrew ? 'is-full' : partial ? 'is-partial' : 'is-solo'}" style="--stage-color:${meta.color}">
+        <div class="compare-time">${r.start}</div>
+        <div class="compare-info">
+          <div class="compare-artist">${escapeHtml(r.artist)}</div>
+          <div class="compare-stage">${meta.name}</div>
+        </div>
+        <div class="compare-dots">${dots}</div>
+      </div>`;
+    }).join('');
+    html += `</div>`;
+  }
+
+  return html;
+}
+
 function renderGroups() {
   const list = document.getElementById('groupsList');
   if (!state.groups.length) {
@@ -999,20 +1179,22 @@ function renderGroups() {
     return;
   }
   list.innerHTML = state.groups.map(g => {
-    const picksCount = g.picks?.length || 0;
+    // Count UNIQUE sets picked across all crew members
+    const uniqueSetCount = new Set((g.picks || []).map(p => p.set_id)).size;
+    const expanded = state._expandedCompare === g.id;
     return `<div class="group-card" style="--group-color:${g.color}">
       <div class="group-card-head">
         <div class="group-avatar">${escapeHtml((g.name[0] || '?').toUpperCase())}</div>
         <div style="flex:1;min-width:0">
           <div class="group-name">${escapeHtml(g.name)}</div>
-          <div class="group-meta">${g.members.length} MEMBERS · ${picksCount} PICKS</div>
+          <div class="group-meta">${g.members.length} MEMBER${g.members.length === 1 ? '' : 'S'} · ${uniqueSetCount} SET${uniqueSetCount === 1 ? '' : 'S'}</div>
         </div>
         <div class="group-actions">
-          <button class="icon-btn" data-action="edit-group" data-id="${g.id}" aria-label="Edit">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          <button class="icon-btn" data-action="edit-group" data-id="${g.id}" aria-label="Edit crew">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <button class="icon-btn" data-action="leave-group" data-id="${g.id}" aria-label="Leave">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <button class="icon-btn" data-action="leave-group" data-id="${g.id}" aria-label="Leave crew">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           </button>
         </div>
       </div>
@@ -1028,16 +1210,22 @@ function renderGroups() {
       <div class="group-meeting">
         <div class="group-meeting-label">Meeting Spot</div>
         <div class="group-meeting-row">
-          <select data-action="set-meeting-stage" data-group="${g.id}">
+          <select data-action="set-meeting-stage" data-group="${g.id}" aria-label="Meeting stage">
             <option value="">— Pick stage —</option>
             ${STAGE_ORDER.map(s => `<option value="${s}" ${g.meeting_stage === s ? 'selected' : ''}>${STAGES[s].name}</option>`).join('')}
             <option value="entrance" ${g.meeting_stage === 'entrance' ? 'selected' : ''}>Main Entrance</option>
             <option value="ferriswheel" ${g.meeting_stage === 'ferriswheel' ? 'selected' : ''}>Ferris Wheel</option>
             <option value="custom" ${g.meeting_stage === 'custom' ? 'selected' : ''}>Custom landmark</option>
           </select>
-          <input type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" value="${escapeHtml(g.meeting_time || '')}">
+          <input type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" aria-label="Meeting time" value="${escapeHtml(g.meeting_time || '')}">
         </div>
       </div>
+      <button class="compare-toggle ${expanded ? 'open' : ''}" data-action="toggle-compare" data-id="${g.id}" aria-expanded="${expanded}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
+        <span>${expanded ? 'HIDE' : 'COMPARE'} CREW PICKS</span>
+        <span class="compare-chev" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
+      </button>
+      ${expanded ? `<div class="compare-panel">${renderCompareForGroup(g)}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -1460,10 +1648,19 @@ function toggleStage(stage) {
   saveLocal();
 }
 function togglePick(id) {
-  if (state.picks[id]) delete state.picks[id]; else state.picks[id] = true;
+  const picked = !state.picks[id];
+  if (picked) state.picks[id] = true; else delete state.picks[id];
   saveLocal();
   renderSchedule();
   if (state.currentTab === 'picks') renderPicks();
+  // Auto-broadcast to crews (best-effort, doesn't block UI)
+  syncPickToCrews(id, picked).then(() => {
+    // Refresh local cache so Compare view reflects new state
+    return fetchMyGroups();
+  }).then(() => {
+    if (state.currentTab === 'groups') renderGroups();
+    if (state.currentTab === 'schedule') renderSchedule();
+  }).catch(err => console.warn('crew sync failed', err));
 }
 
 // ===== EVENT WIRING =====
@@ -1488,6 +1685,15 @@ function wireEvents() {
     }
     if (a === 'copy-code') {
       navigator.clipboard?.writeText(t.dataset.code).then(() => toast('Code copied!')).catch(() => {});
+      return;
+    }
+    if (a === 'toggle-compare') {
+      state._expandedCompare = state._expandedCompare === t.dataset.id ? null : t.dataset.id;
+      renderGroups();
+      return;
+    }
+    if (a === 'refresh-groups') {
+      manualRefresh();
       return;
     }
   });

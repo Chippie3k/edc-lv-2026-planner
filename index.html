@@ -992,6 +992,238 @@ main {
 }
 .empty-groups p { font-size: 13px; line-height: 1.6; margin-bottom: 16px; }
 
+/* ===== REFRESH BUTTON ===== */
+.refresh-btn {
+  background: #ffffff08;
+  border: 1px solid #ffffff14;
+  color: var(--ink-dim);
+  width: 36px; height: 36px;
+  border-radius: 100px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: all 0.2s;
+}
+.refresh-btn:hover { background: #ffffff14; color: var(--ink); }
+.refresh-btn svg { width: 15px; height: 15px; }
+.refresh-btn[data-status="connected"]::after {
+  content: '';
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--nG);
+  box-shadow: 0 0 6px var(--nG);
+}
+.refresh-btn[data-status="error"]::after {
+  content: '';
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--wL);
+}
+.refresh-btn.spinning svg {
+  animation: spin360 0.8s ease-out;
+}
+@keyframes spin360 { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+/* ===== COMPARE PANEL ===== */
+.compare-toggle {
+  margin-top: 12px;
+  width: 100%;
+  background: linear-gradient(135deg, var(--group-color, var(--neon-pink))20, transparent);
+  border: 1px solid var(--group-color, var(--neon-pink));
+  border-radius: 12px;
+  color: var(--ink);
+  font-family: var(--head);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  padding: 11px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  transition: all 0.2s;
+}
+.compare-toggle:hover {
+  background: linear-gradient(135deg, var(--group-color, var(--neon-pink))30, transparent);
+}
+.compare-toggle svg { width: 14px; height: 14px; color: var(--group-color, var(--neon-pink)); }
+.compare-toggle span:nth-child(2) { flex: 1; text-align: left; }
+.compare-toggle .compare-chev { font-size: 14px; color: var(--ink-dim); }
+.compare-toggle.open {
+  border-radius: 12px 12px 0 0;
+  border-bottom-color: transparent;
+}
+
+.compare-panel {
+  border: 1px solid var(--group-color, var(--neon-pink));
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  padding: 14px;
+  background: #00000040;
+  animation: slideDown 0.25s ease-out;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.compare-empty {
+  text-align: center;
+  color: var(--ink-mute);
+  font-size: 12px;
+  padding: 24px 12px;
+  line-height: 1.5;
+}
+
+.compare-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.compare-stat {
+  background: #ffffff05;
+  border: 1px solid #ffffff10;
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: center;
+}
+.compare-stat.all { border-color: #39ff1450; background: #39ff1410; }
+.compare-stat.some { border-color: #ffd60a50; background: #ffd60a10; }
+.compare-stat.one { border-color: #ff006e40; background: #ff006e08; }
+.cs-num {
+  font-family: var(--display);
+  font-size: 18px;
+  color: var(--ink);
+  line-height: 1;
+}
+.compare-stat.all .cs-num { color: var(--nG); }
+.compare-stat.some .cs-num { color: var(--gold); }
+.cs-lbl {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: var(--ink-mute);
+  letter-spacing: 0.1em;
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+
+.compare-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #ffffff14;
+}
+.compare-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  background: #ffffff06;
+  padding: 4px 9px 4px 7px;
+  border-radius: 100px;
+  border: 1px solid #ffffff10;
+}
+.cl-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px currentColor;
+}
+
+.compare-day { margin-bottom: 10px; }
+.compare-day:last-child { margin-bottom: 0; }
+.compare-day-head {
+  font-family: var(--display);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--ink-mute);
+  margin-bottom: 6px;
+  padding-left: 2px;
+  text-transform: uppercase;
+}
+
+.compare-row {
+  display: grid;
+  grid-template-columns: 58px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 11px;
+  background: #ffffff05;
+  border: 1px solid #ffffff10;
+  border-left: 3px solid var(--stage-color);
+  border-radius: 10px;
+  margin-bottom: 5px;
+}
+.compare-row.is-full {
+  background: linear-gradient(90deg, #39ff1418, #ffffff05);
+  border-color: #39ff1440;
+  border-left-color: var(--stage-color);
+}
+.compare-row.is-partial {
+  background: linear-gradient(90deg, #ffd60a14, #ffffff05);
+  border-color: #ffd60a35;
+  border-left-color: var(--stage-color);
+}
+.compare-time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+.compare-info { min-width: 0; }
+.compare-artist {
+  font-family: var(--head);
+  font-size: 12px;
+  color: var(--ink);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  word-break: break-word;
+}
+.compare-stage {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--stage-color);
+  letter-spacing: 0.08em;
+  margin-top: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.compare-dots {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 92px;
+}
+.compare-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  font-family: var(--head);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #ffffff14;
+  color: var(--ink-mute);
+  background: transparent;
+}
+.compare-dot.on {
+  box-shadow: 0 0 6px currentColor;
+}
+.compare-dot.off { opacity: 0.35; }
+
 /* ===== MODAL ===== */
 .modal-bg {
   position: fixed;
@@ -1998,9 +2230,12 @@ main {
   <div class="groups-header">
     <h2>Your Crews</h2>
     <div class="groups-header-actions">
+      <button class="refresh-btn" id="refreshGroupsBtn" data-action="refresh-groups" data-status="idle" aria-label="Refresh crews">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
       <button class="btn-ghost" id="joinGroupBtn">JOIN</button>
       <button class="btn-primary" id="addGroupBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         NEW
       </button>
     </div>
