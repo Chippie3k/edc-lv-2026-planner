@@ -65,6 +65,9 @@ select:focus-visible,
 }
 
 /* ===== REDUCED MOTION ===== */
+/* Disable jumpy/decorative motion when the user prefers reduced motion,
+   but keep the daisy logo's slow 32s spin — it's gentle enough not to
+   cause vestibular issues and is part of the brand. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -72,9 +75,9 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  .daisy-mark { animation: none; }
   .now-dot { animation: none; }
   .bg-stars { animation: none; }
+  .daisy-mark { animation: spin 32s linear infinite !important; }
 }
 
 body {
