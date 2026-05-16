@@ -454,6 +454,19 @@ function meetAfterOptions(selected) {
   return `<option value="">Then heading to... (optional)</option><optgroup label="Stages">${stageOpts}</optgroup><optgroup label="Landmarks">${monOpts}</optgroup>`;
 }
 
+// Meet extras (wait + after) stored locally — no schema migration required
+const MEET_EXTRAS_KEY = 'edc-meet-extras-v1';
+function getMeetExtras(groupId) {
+  try { return JSON.parse(localStorage.getItem(MEET_EXTRAS_KEY) || '{}')[groupId] || {}; } catch(e) { return {}; }
+}
+function setMeetExtras(groupId, patch) {
+  try {
+    const all = JSON.parse(localStorage.getItem(MEET_EXTRAS_KEY) || '{}');
+    all[groupId] = { ...(all[groupId] || {}), ...patch };
+    localStorage.setItem(MEET_EXTRAS_KEY, JSON.stringify(all));
+  } catch(e) {}
+}
+
 function renderMeetCallout(g) {
   if (!g.meeting_stage && !g.meeting_time) return '';
   const loc  = g.meeting_stage ? locationLabel(g.meeting_stage) : '';
@@ -1449,6 +1462,8 @@ function renderGroups() {
     // Count UNIQUE sets picked across all crew members
     const uniqueSetCount = new Set((g.picks || []).map(p => p.set_id)).size;
     const expanded = state._expandedCompare === g.id;
+    const extras = getMeetExtras(g.id);
+    const gx = { ...g, meeting_wait: extras.wait ?? null, meeting_after: extras.after ?? null };
     return `<div class="group-card" style="--group-color:${g.color}">
       <div class="group-card-head">
         <div class="group-avatar">${escapeHtml((g.name[0] || '?').toUpperCase())}</div>
@@ -1476,22 +1491,22 @@ function renderGroups() {
       </div>
       <div class="group-meeting">
         <div class="group-meeting-label">Meet Times</div>
-        ${renderMeetCallout(g)}
+        ${renderMeetCallout(gx)}
         <div class="meet-fields">
           <div class="meet-row">
             <select class="meet-select" data-action="set-meeting-stage" data-group="${g.id}" aria-label="Meeting location">
-              ${meetLocationOptions(g.meeting_stage)}
+              ${meetLocationOptions(gx.meeting_stage)}
             </select>
-            <input class="meet-input" type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" aria-label="Meeting time" value="${escapeHtml(g.meeting_time || '')}">
+            <input class="meet-input" type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" aria-label="Meeting time" value="${escapeHtml(gx.meeting_time || '')}">
           </div>
           <div class="meet-row">
             <select class="meet-select" data-action="set-meeting-wait" data-group="${g.id}" aria-label="How long to wait">
               <option value="">How long to wait?</option>
-              ${[5,10,15,20,30,45,60].map(m => `<option value="${m}" ${g.meeting_wait == m ? 'selected' : ''}>${m} min</option>`).join('')}
-              <option value="999" ${g.meeting_wait == 999 ? 'selected' : ''}>Until they show</option>
+              ${[5,10,15,20,30,45,60].map(m => `<option value="${m}" ${gx.meeting_wait == m ? 'selected' : ''}>${m} min</option>`).join('')}
+              <option value="999" ${gx.meeting_wait == 999 ? 'selected' : ''}>Until they show</option>
             </select>
             <select class="meet-select" data-action="set-meeting-after" data-group="${g.id}" aria-label="After meeting, heading to">
-              ${meetAfterOptions(g.meeting_after)}
+              ${meetAfterOptions(gx.meeting_after)}
             </select>
           </div>
         </div>
@@ -1991,12 +2006,12 @@ function wireEvents() {
       // handled on blur/input — see below
     }
     if (t.dataset.action === 'set-meeting-wait') {
-      updateGroup(t.dataset.group, { meeting_wait: t.value ? parseInt(t.value) : null })
-        .then(() => fetchMyGroups()).then(() => renderGroups());
+      setMeetExtras(t.dataset.group, { wait: t.value ? parseInt(t.value) : null });
+      renderGroups();
     }
     if (t.dataset.action === 'set-meeting-after') {
-      updateGroup(t.dataset.group, { meeting_after: t.value || null })
-        .then(() => fetchMyGroups()).then(() => renderGroups());
+      setMeetExtras(t.dataset.group, { after: t.value || null });
+      renderGroups();
     }
   });
 
