@@ -1325,6 +1325,102 @@ main {
 }
 .plat-overlap-bar { height: 100%; background: var(--neon-cyan); border-radius: 2px; min-width: 2px; }
 .plat-empty { font-size: 12px; color: var(--ink-mute); text-align: center; padding: 12px; }
+.plat-meet-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #ffffff04;
+  border-radius: 8px;
+}
+.plat-rsvp-btn {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  background: #ffffff08;
+  border: 1px solid #ffffff14;
+  border-radius: 6px;
+  color: var(--ink-dim);
+  font-family: var(--body);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.plat-rsvp-btn:hover { background: #ffffff14; color: var(--ink); }
+.plat-rsvp-btn.rsvpd { background: #00f5ff12; border-color: var(--neon-cyan); color: var(--neon-cyan); }
+.plat-own-badge {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  padding: 3px 6px;
+  background: #ffffff06;
+  border-radius: 4px;
+}
+
+/* ===== MEET RSVP ===== */
+.rsvp-btn {
+  width: 100%;
+  padding: 10px 14px;
+  background: #ffffff06;
+  border: 1px solid #ffffff14;
+  border-radius: 8px;
+  color: var(--ink-dim);
+  font-family: var(--body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: all 0.15s;
+  text-align: center;
+}
+.rsvp-btn:hover { background: #ffffff10; color: var(--ink); }
+.rsvp-btn.rsvp-confirmed {
+  background: #00f5ff12;
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  font-weight: 600;
+}
+.meet-rsvp-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--neon-cyan);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
+/* ===== PLATFORM BADGE ON SET CARDS ===== */
+.plat-set-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #ffffff08;
+  border: 1px solid #ffffff14;
+  border-radius: 4px;
+  color: var(--ink-mute);
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 2px 6px;
+  cursor: pointer;
+  margin-top: 3px;
+  transition: all 0.15s;
+}
+.plat-set-badge:hover { background: #ffffff14; color: var(--ink-dim); }
+.plat-set-badge.open { background: #00f5ff10; border-color: #00f5ff30; color: var(--neon-cyan); }
+.plat-crew-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.plat-crew-chip {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  color: #0a0518;
+  flex-shrink: 0;
+}
 
 .empty-groups {
   text-align: center;

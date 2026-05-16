@@ -467,6 +467,19 @@ function setMeetExtras(groupId, patch) {
   } catch(e) {}
 }
 
+// Meet RSVPs — "I'll try to meet you there" per group, stored locally
+const MEET_RSVP_KEY = 'edc-meet-rsvps-v1';
+function getMeetRsvps() {
+  try { return JSON.parse(localStorage.getItem(MEET_RSVP_KEY) || '{}'); } catch(e) { return {}; }
+}
+function getMeetRsvp(groupId) { return !!getMeetRsvps()[groupId]; }
+function toggleMeetRsvp(groupId) {
+  const all = getMeetRsvps();
+  if (all[groupId]) delete all[groupId];
+  else all[groupId] = true;
+  localStorage.setItem(MEET_RSVP_KEY, JSON.stringify(all));
+}
+
 function renderMeetCallout(g) {
   if (!g.meeting_stage && !g.meeting_time) return '';
   const loc  = g.meeting_stage ? locationLabel(g.meeting_stage) : '';
@@ -476,9 +489,11 @@ function renderMeetCallout(g) {
   const waitLabel = waitVal === 999 ? 'Wait until they show' : waitVal ? `Wait up to ${waitVal} min` : '';
   const afterLabel = g.meeting_after ? `Then → ${locationLabel(g.meeting_after)}` : '';
   const meta = [waitLabel, afterLabel].filter(Boolean).join(' · ');
+  const rsvpd = g.id ? getMeetRsvp(g.id) : false;
   return `<div class="meet-callout">
     <div class="meet-callout-loc">${loc ? `📍 ${escapeHtml(loc)}` : ''}${loc && time ? ' · ' : ''}${time ? escapeHtml(time) : ''}</div>
     ${meta ? `<div class="meet-callout-meta">${escapeHtml(meta)}</div>` : ''}
+    ${rsvpd ? `<div class="meet-rsvp-badge">✓ You're planning to be here</div>` : ''}
   </div>`;
 }
 
@@ -1230,11 +1245,29 @@ function renderSetCard(day, stage, set, now, isToday) {
   const isPast = isToday && now >= endM;
   const conflict = isPicked && hasConflict(id);
 
-  // Crews that picked this set
+  // Crews that picked this set (user's own groups)
   const crewDots = state.groups
     .filter(g => g.picks?.some(p => p.set_id === id))
     .map(g => `<div class="crew-dot" style="background:${g.color};color:#0a0518" title="${escapeHtml(g.name)}">${escapeHtml((g.name[0] || '?').toUpperCase())}</div>`)
     .join('');
+
+  // Platform crew count badge (all groups on the platform)
+  let platBadge = '';
+  if (_platformSetMap) {
+    const platGs = _platformSetMap.get(id);
+    const platCount = platGs ? platGs.size : 0;
+    if (platCount > 0) {
+      const expanded = state._expandedPlatformSet === id;
+      let chips = '';
+      if (expanded && _platformCache) {
+        chips = `<div class="plat-crew-chips">${[...platGs].map(gid => {
+          const gr = _platformCache.groups.find(x => x.id === gid);
+          return gr ? `<span class="plat-crew-chip" style="background:${gr.color}" title="${escapeHtml(gr.name)}">${escapeHtml((gr.name[0]||'?').toUpperCase())}</span>` : '';
+        }).join('')}</div>`;
+      }
+      platBadge = `<button class="plat-set-badge${expanded ? ' open' : ''}" data-action="toggle-plat-set" data-id="${id}">👥 ${platCount}</button>${chips}`;
+    }
+  }
 
   let classes = 'set-card';
   if (isNow) classes += ' is-now';
@@ -1248,6 +1281,7 @@ function renderSetCard(day, stage, set, now, isToday) {
     <div class="set-info">
       <div class="set-artist">${escapeHtml(artist)}${tag ? `<span class="set-tag">${escapeHtml(tag)}</span>` : ''}</div>
       ${crewDots ? `<div class="set-crew-dots" aria-label="Crews who picked this set">${crewDots}</div>` : ''}
+      ${platBadge}
     </div>
     <button class="star-btn" data-action="star" data-id="${id}" aria-label="${escapeHtml(aria)}" aria-pressed="${isPicked}">
       <svg viewBox="0 0 24 24" fill="${isPicked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
@@ -1510,6 +1544,9 @@ function renderGroups() {
             </select>
           </div>
         </div>
+        ${gx.meeting_stage || gx.meeting_time ? `<button class="rsvp-btn ${getMeetRsvp(g.id) ? 'rsvp-confirmed' : ''}" data-action="toggle-meet-rsvp" data-id="${g.id}">
+          ${getMeetRsvp(g.id) ? '✓ You\'re planning to make this meet' : '🤝 I\'ll try to meet you here'}
+        </button>` : ''}
       </div>
       <button class="compare-toggle ${expanded ? 'open' : ''}" data-action="toggle-compare" data-id="${g.id}" aria-expanded="${expanded}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M6 12h12M10 18h4"/></svg>
@@ -1982,6 +2019,16 @@ function wireEvents() {
       renderGroups();
       return;
     }
+    if (a === 'toggle-meet-rsvp') {
+      toggleMeetRsvp(t.dataset.id);
+      renderGroups();
+      return;
+    }
+    if (a === 'toggle-plat-set') {
+      state._expandedPlatformSet = state._expandedPlatformSet === t.dataset.id ? null : t.dataset.id;
+      renderSchedule();
+      return;
+    }
     if (a === 'toggle-platform') {
       const panel = document.getElementById('platformPanel');
       const chev = document.querySelector('.platform-chev');
@@ -2059,6 +2106,8 @@ function wireEvents() {
 
 // ===== PLATFORM COMPARISON =====
 let _platformCache = null;
+let _platformSetMap = null;   // Map<set_id, Set<group_id>>
+let _platformGroupMap = null; // Map<group_id, Set<set_id>>
 let _platformLoading = false;
 
 async function fetchPlatformData() {
@@ -2067,11 +2116,22 @@ async function fetchPlatformData() {
   _platformLoading = true;
   try {
     const [{ data: groups, error: ge }, { data: picks, error: pe }] = await Promise.all([
-      sb.from('edc_groups').select('id,name,color').limit(500),
+      sb.from('edc_groups').select('id,name,color,meeting_stage,meeting_time').limit(500),
       sb.from('edc_group_picks').select('group_id,set_id').limit(10000),
     ]);
     if (ge) throw ge;
     if (pe) throw pe;
+    // Pre-compute lookup maps
+    const setMap = new Map();
+    const groupMap = new Map();
+    for (const p of (picks || [])) {
+      if (!setMap.has(p.set_id)) setMap.set(p.set_id, new Set());
+      setMap.get(p.set_id).add(p.group_id);
+      if (!groupMap.has(p.group_id)) groupMap.set(p.group_id, new Set());
+      groupMap.get(p.group_id).add(p.set_id);
+    }
+    _platformSetMap = setMap;
+    _platformGroupMap = groupMap;
     _platformCache = { groups: groups || [], picks: picks || [] };
     return _platformCache;
   } catch(e) {
@@ -2105,13 +2165,9 @@ async function renderPlatformSection() {
   }
 
   const { groups, picks } = data;
-
-  // set_id → Set of group_ids that picked it
-  const setGroupMap = new Map();
-  for (const p of picks) {
-    if (!setGroupMap.has(p.set_id)) setGroupMap.set(p.set_id, new Set());
-    setGroupMap.get(p.set_id).add(p.group_id);
-  }
+  // Use pre-computed maps
+  const setGroupMap = _platformSetMap;
+  const groupPicksMap = _platformGroupMap;
 
   // Top 15 hot sets
   const hotSets = [...setGroupMap.entries()]
@@ -2121,13 +2177,6 @@ async function renderPlatformSection() {
 
   const myPickIds = new Set(Object.keys(state.picks || {}));
   const myGroupIds = new Set(state.groups.map(g => g.id));
-
-  // group_id → Set of set_ids
-  const groupPicksMap = new Map();
-  for (const p of picks) {
-    if (!groupPicksMap.has(p.group_id)) groupPicksMap.set(p.group_id, new Set());
-    groupPicksMap.get(p.group_id).add(p.set_id);
-  }
 
   // Crews with most overlap with my personal picks (exclude own crews)
   const crewOverlaps = groups
@@ -2141,6 +2190,11 @@ async function renderPlatformSection() {
     .filter(g => g.total > 0 && g.overlap > 0)
     .sort((a, b) => b.overlap - a.overlap)
     .slice(0, 10);
+
+  // Groups that have a meet scheduled (other crews' public meet times)
+  const scheduledMeets = groups
+    .filter(g => g.meeting_stage || g.meeting_time)
+    .sort((a, b) => (a.meeting_time || '').localeCompare(b.meeting_time || ''));
 
   const hotHTML = hotSets.map((h, i) => {
     const s = resolvePlatformSetId(h.setId);
@@ -2171,12 +2225,33 @@ async function renderPlatformSection() {
         </div>`;
       }).join('');
 
+  const meetsHTML = scheduledMeets.length === 0
+    ? `<p class="plat-empty">No crews have set a meet time yet.</p>`
+    : scheduledMeets.map(g => {
+        const loc = g.meeting_stage ? locationLabel(g.meeting_stage) : '';
+        const time = g.meeting_time || '';
+        const rsvpd = getMeetRsvp(g.id);
+        const isOwn = myGroupIds.has(g.id);
+        return `<div class="plat-meet-row">
+          <div class="plat-crew-dot" style="background:${g.color}">${escapeHtml((g.name[0]||'?').toUpperCase())}</div>
+          <div class="plat-crew-info">
+            <span class="plat-crew-name">${escapeHtml(g.name)}</span>
+            <span class="plat-crew-stats">${loc ? `📍 ${escapeHtml(loc)}` : ''}${loc && time ? ' · ' : ''}${time ? escapeHtml(time) : ''}</span>
+          </div>
+          ${!isOwn ? `<button class="plat-rsvp-btn ${rsvpd ? 'rsvpd' : ''}" data-action="toggle-meet-rsvp" data-id="${g.id}">
+            ${rsvpd ? '✓ In' : "I'll try"}
+          </button>` : `<span class="plat-own-badge">YOUR CREW</span>`}
+        </div>`;
+      }).join('');
+
   panel.innerHTML = `
     <div class="plat-kpi-row">
       <div class="plat-kpi"><span class="plat-kpi-num">${groups.length}</span><span class="plat-kpi-label">Crews</span></div>
       <div class="plat-kpi"><span class="plat-kpi-num">${picks.length}</span><span class="plat-kpi-label">Total Picks</span></div>
       <div class="plat-kpi"><span class="plat-kpi-num">${myPickIds.size}</span><span class="plat-kpi-label">My Picks</span></div>
     </div>
+    ${scheduledMeets.length > 0 ? `<div class="plat-section-head">📍 Scheduled Meets (${scheduledMeets.length})</div>
+    <div class="plat-crew-list">${meetsHTML}</div>` : ''}
     <div class="plat-section-head">🔥 Hot Sets Across All Crews</div>
     <div class="plat-set-list">${hotHTML || '<p class="plat-empty">No picks on the platform yet.</p>'}</div>
     <div class="plat-section-head">🤝 Crews With Similar Taste</div>
