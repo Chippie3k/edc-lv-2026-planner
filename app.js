@@ -1982,6 +1982,15 @@ function wireEvents() {
       renderGroups();
       return;
     }
+    if (a === 'toggle-platform') {
+      const panel = document.getElementById('platformPanel');
+      const chev = document.querySelector('.platform-chev');
+      const open = panel.style.display === 'none';
+      panel.style.display = open ? 'block' : 'none';
+      if (chev) chev.textContent = open ? '▾' : '▸';
+      if (open) renderPlatformSection();
+      return;
+    }
     if (a === 'refresh-groups') {
       manualRefresh();
       return;
@@ -2046,6 +2055,133 @@ function wireEvents() {
       if (state._joinFromApp) { hideOnboard(); return; }
     }
   });
+}
+
+// ===== PLATFORM COMPARISON =====
+let _platformCache = null;
+let _platformLoading = false;
+
+async function fetchPlatformData() {
+  if (_platformCache) return _platformCache;
+  if (_platformLoading) return null;
+  _platformLoading = true;
+  try {
+    const [{ data: groups, error: ge }, { data: picks, error: pe }] = await Promise.all([
+      sb.from('edc_groups').select('id,name,color').limit(500),
+      sb.from('edc_group_picks').select('group_id,set_id').limit(10000),
+    ]);
+    if (ge) throw ge;
+    if (pe) throw pe;
+    _platformCache = { groups: groups || [], picks: picks || [] };
+    return _platformCache;
+  } catch(e) {
+    console.warn('platform fetch failed', e);
+    return null;
+  } finally {
+    _platformLoading = false;
+  }
+}
+
+function resolvePlatformSetId(setId) {
+  const m = setId.match(/^d(\d+)-([^-]+)-(.+)$/);
+  if (!m) return null;
+  const day = parseInt(m[1]);
+  const stage = m[2];
+  const start = m[3];
+  const set = (SCHEDULE[day]?.[stage] || []).find(s => s[0] === start);
+  if (!set) return null;
+  return { day, stage, start: set[0], end: set[1], artist: set[2] };
+}
+
+async function renderPlatformSection() {
+  const panel = document.getElementById('platformPanel');
+  if (!panel) return;
+  panel.innerHTML = `<div class="platform-loading">Scanning platform…</div>`;
+
+  const data = await fetchPlatformData();
+  if (!data) {
+    panel.innerHTML = `<div class="platform-loading">Could not load. Check your connection.</div>`;
+    return;
+  }
+
+  const { groups, picks } = data;
+
+  // set_id → Set of group_ids that picked it
+  const setGroupMap = new Map();
+  for (const p of picks) {
+    if (!setGroupMap.has(p.set_id)) setGroupMap.set(p.set_id, new Set());
+    setGroupMap.get(p.set_id).add(p.group_id);
+  }
+
+  // Top 15 hot sets
+  const hotSets = [...setGroupMap.entries()]
+    .map(([setId, gs]) => ({ setId, count: gs.size }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 15);
+
+  const myPickIds = new Set(Object.keys(state.picks || {}));
+  const myGroupIds = new Set(state.groups.map(g => g.id));
+
+  // group_id → Set of set_ids
+  const groupPicksMap = new Map();
+  for (const p of picks) {
+    if (!groupPicksMap.has(p.group_id)) groupPicksMap.set(p.group_id, new Set());
+    groupPicksMap.get(p.group_id).add(p.set_id);
+  }
+
+  // Crews with most overlap with my personal picks (exclude own crews)
+  const crewOverlaps = groups
+    .filter(g => !myGroupIds.has(g.id))
+    .map(g => {
+      const theirPicks = groupPicksMap.get(g.id) || new Set();
+      let overlap = 0;
+      for (const id of myPickIds) { if (theirPicks.has(id)) overlap++; }
+      return { ...g, overlap, total: theirPicks.size };
+    })
+    .filter(g => g.total > 0 && g.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, 10);
+
+  const hotHTML = hotSets.map((h, i) => {
+    const s = resolvePlatformSetId(h.setId);
+    const artist = s ? s.artist : h.setId;
+    const stageColor = s ? (STAGES[s.stage]?.color || '#888') : '#888';
+    const inPicks = myPickIds.has(h.setId);
+    return `<div class="plat-set-row">
+      <span class="plat-rank">${i + 1}</span>
+      <div class="plat-set-info">
+        <span class="plat-artist${inPicks ? ' plat-in-picks' : ''}">${escapeHtml(artist)}${inPicks ? ' ✓' : ''}</span>
+        ${s ? `<span class="plat-stage" style="color:${stageColor}">${s.stage} · Day ${s.day}</span>` : ''}
+      </div>
+      <span class="plat-count">${h.count} crew${h.count !== 1 ? 's' : ''}</span>
+    </div>`;
+  }).join('');
+
+  const overlapHTML = crewOverlaps.length === 0
+    ? (myPickIds.size > 0 ? `<p class="plat-empty">No other crews share your picks yet.</p>` : `<p class="plat-empty">Add picks first to find crews like yours.</p>`)
+    : crewOverlaps.map(g => {
+        const pct = myPickIds.size > 0 ? Math.round((g.overlap / myPickIds.size) * 100) : 0;
+        return `<div class="plat-crew-row">
+          <div class="plat-crew-dot" style="background:${g.color}">${escapeHtml((g.name[0] || '?').toUpperCase())}</div>
+          <div class="plat-crew-info">
+            <span class="plat-crew-name">${escapeHtml(g.name)}</span>
+            <span class="plat-crew-stats">${g.overlap} shared · ${g.total} total picks</span>
+          </div>
+          <div class="plat-overlap-bar-wrap"><div class="plat-overlap-bar" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join('');
+
+  panel.innerHTML = `
+    <div class="plat-kpi-row">
+      <div class="plat-kpi"><span class="plat-kpi-num">${groups.length}</span><span class="plat-kpi-label">Crews</span></div>
+      <div class="plat-kpi"><span class="plat-kpi-num">${picks.length}</span><span class="plat-kpi-label">Total Picks</span></div>
+      <div class="plat-kpi"><span class="plat-kpi-num">${myPickIds.size}</span><span class="plat-kpi-label">My Picks</span></div>
+    </div>
+    <div class="plat-section-head">🔥 Hot Sets Across All Crews</div>
+    <div class="plat-set-list">${hotHTML || '<p class="plat-empty">No picks on the platform yet.</p>'}</div>
+    <div class="plat-section-head">🤝 Crews With Similar Taste</div>
+    <div class="plat-crew-list">${overlapHTML}</div>
+  `;
 }
 
 // ===== INIT =====
