@@ -1177,6 +1177,57 @@ main {
   gap: 6px;
 }
 
+/* ===== MEET TIMES ===== */
+.meet-callout {
+  background: #00f5ff09;
+  border: 1px solid #00f5ff20;
+  border-left: 3px solid var(--neon-cyan);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.meet-callout-loc {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.meet-callout-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+  margin-top: 3px;
+  letter-spacing: 0.02em;
+}
+.meet-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meet-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.meet-select, .meet-input {
+  background: #ffffff08;
+  border: 1px solid #ffffff14;
+  color: var(--ink);
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-family: var(--body);
+  font-size: 12px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+.meet-select:focus, .meet-input:focus { border-color: var(--neon-cyan); }
+.meet-select option, .meet-select optgroup {
+  background: #14082e;
+  color: var(--ink);
+}
+
 .empty-groups {
   text-align: center;
   padding: 50px 20px;

@@ -408,6 +408,67 @@ const ROUTES = [
   ['stereoBLOOM','bionicJUNGLE',    8, 'easy', 'Both tucked in the blooming corner.'],
 ];
 
+// ===== EDC MONUMENTS (meet location options) =====
+const EDC_MONUMENTS = [
+  { value: 'ferriswheel',  label: 'Ferris Wheel' },
+  { value: 'entrance',     label: 'Main Entrance / Gate 1' },
+  { value: 'owl',          label: 'The Owl (Gufo)' },
+  { value: 'mushroom',     label: 'Mushroom Forest' },
+  { value: 'totemfield',   label: 'Totem Forest / Infield' },
+  { value: 'bridge',       label: 'The Bridge' },
+  { value: 'artcar',       label: 'Art Car Zone' },
+  { value: 'foodcourt',    label: 'Food Court / Snack Attack' },
+  { value: 'merch',        label: 'Merch Tent' },
+  { value: 'firstaid',     label: 'First Aid / Medical' },
+  { value: 'carnival',     label: 'Carnival Rides / Swings' },
+  { value: 'water',        label: 'Water Station' },
+  { value: 'custom',       label: 'Custom Spot' },
+];
+
+function locationLabel(val) {
+  if (!val) return '';
+  const m = EDC_MONUMENTS.find(x => x.value === val);
+  if (m) return m.label;
+  const s = STAGES[val];
+  if (s) return s.name;
+  return val;
+}
+
+function meetLocationOptions(selected) {
+  const stageOpts = STAGE_ORDER.map(s =>
+    `<option value="${s}" ${selected === s ? 'selected' : ''}>${STAGES[s].name}</option>`
+  ).join('');
+  const monOpts = EDC_MONUMENTS.map(m =>
+    `<option value="${m.value}" ${selected === m.value ? 'selected' : ''}>${m.label}</option>`
+  ).join('');
+  return `<option value="">-- Where to meet --</option><optgroup label="Stages">${stageOpts}</optgroup><optgroup label="Landmarks">${monOpts}</optgroup>`;
+}
+
+function meetAfterOptions(selected) {
+  const stageOpts = STAGE_ORDER.map(s =>
+    `<option value="${s}" ${selected === s ? 'selected' : ''}>${STAGES[s].name}</option>`
+  ).join('');
+  const monOpts = EDC_MONUMENTS.filter(m => m.value !== 'custom').map(m =>
+    `<option value="${m.value}" ${selected === m.value ? 'selected' : ''}>${m.label}</option>`
+  ).join('');
+  return `<option value="">Then heading to... (optional)</option><optgroup label="Stages">${stageOpts}</optgroup><optgroup label="Landmarks">${monOpts}</optgroup>`;
+}
+
+function renderMeetCallout(g) {
+  if (!g.meeting_stage && !g.meeting_time) return '';
+  const loc  = g.meeting_stage ? locationLabel(g.meeting_stage) : '';
+  const time = g.meeting_time  || '';
+  if (!loc && !time) return '';
+  const waitVal  = g.meeting_wait ? parseInt(g.meeting_wait) : null;
+  const waitLabel = waitVal === 999 ? 'Wait until they show' : waitVal ? `Wait up to ${waitVal} min` : '';
+  const afterLabel = g.meeting_after ? `Then → ${locationLabel(g.meeting_after)}` : '';
+  const meta = [waitLabel, afterLabel].filter(Boolean).join(' · ');
+  return `<div class="meet-callout">
+    <div class="meet-callout-loc">${loc ? `📍 ${escapeHtml(loc)}` : ''}${loc && time ? ' · ' : ''}${time ? escapeHtml(time) : ''}</div>
+    ${meta ? `<div class="meet-callout-meta">${escapeHtml(meta)}</div>` : ''}
+  </div>`;
+}
+
 // ===== STATE =====
 const LOCAL_KEY = 'edc-lv-2026-state-v2';
 const COLORS = ['#ff006e','#00f5ff','#39ff14','#ffd60a','#a020f0','#ff9ed8','#ff6b1a','#7dc14b'];
@@ -792,7 +853,8 @@ async function leaveGroup(groupId) {
 }
 
 async function updateGroup(id, patch) {
-  await sb.from('edc_groups').update(patch).eq('id', id);
+  const { error } = await sb.from('edc_groups').update(patch).eq('id', id);
+  if (error) console.warn('updateGroup failed', error);
 }
 
 async function toggleGroupPick(groupId, setId) {
@@ -1413,16 +1475,25 @@ function renderGroups() {
         </div>
       </div>
       <div class="group-meeting">
-        <div class="group-meeting-label">Meeting Spot</div>
-        <div class="group-meeting-row">
-          <select data-action="set-meeting-stage" data-group="${g.id}" aria-label="Meeting stage">
-            <option value="">— Pick stage —</option>
-            ${STAGE_ORDER.map(s => `<option value="${s}" ${g.meeting_stage === s ? 'selected' : ''}>${STAGES[s].name}</option>`).join('')}
-            <option value="entrance" ${g.meeting_stage === 'entrance' ? 'selected' : ''}>Main Entrance</option>
-            <option value="ferriswheel" ${g.meeting_stage === 'ferriswheel' ? 'selected' : ''}>Ferris Wheel</option>
-            <option value="custom" ${g.meeting_stage === 'custom' ? 'selected' : ''}>Custom landmark</option>
-          </select>
-          <input type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" aria-label="Meeting time" value="${escapeHtml(g.meeting_time || '')}">
+        <div class="group-meeting-label">Meet Times</div>
+        ${renderMeetCallout(g)}
+        <div class="meet-fields">
+          <div class="meet-row">
+            <select class="meet-select" data-action="set-meeting-stage" data-group="${g.id}" aria-label="Meeting location">
+              ${meetLocationOptions(g.meeting_stage)}
+            </select>
+            <input class="meet-input" type="text" data-action="set-meeting-time" data-group="${g.id}" placeholder="Time (e.g. 11 PM)" aria-label="Meeting time" value="${escapeHtml(g.meeting_time || '')}">
+          </div>
+          <div class="meet-row">
+            <select class="meet-select" data-action="set-meeting-wait" data-group="${g.id}" aria-label="How long to wait">
+              <option value="">How long to wait?</option>
+              ${[5,10,15,20,30,45,60].map(m => `<option value="${m}" ${g.meeting_wait == m ? 'selected' : ''}>${m} min</option>`).join('')}
+              <option value="999" ${g.meeting_wait == 999 ? 'selected' : ''}>Until they show</option>
+            </select>
+            <select class="meet-select" data-action="set-meeting-after" data-group="${g.id}" aria-label="After meeting, heading to">
+              ${meetAfterOptions(g.meeting_after)}
+            </select>
+          </div>
         </div>
       </div>
       <button class="compare-toggle ${expanded ? 'open' : ''}" data-action="toggle-compare" data-id="${g.id}" aria-expanded="${expanded}">
@@ -1913,12 +1984,29 @@ function wireEvents() {
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.dataset.action === 'set-meeting-stage') {
-      updateGroup(t.dataset.group, { meeting_stage: t.value || null });
+      updateGroup(t.dataset.group, { meeting_stage: t.value || null })
+        .then(() => fetchMyGroups()).then(() => renderGroups());
     }
     if (t.dataset.action === 'set-meeting-time') {
-      updateGroup(t.dataset.group, { meeting_time: t.value || null });
+      // handled on blur/input — see below
+    }
+    if (t.dataset.action === 'set-meeting-wait') {
+      updateGroup(t.dataset.group, { meeting_wait: t.value ? parseInt(t.value) : null })
+        .then(() => fetchMyGroups()).then(() => renderGroups());
+    }
+    if (t.dataset.action === 'set-meeting-after') {
+      updateGroup(t.dataset.group, { meeting_after: t.value || null })
+        .then(() => fetchMyGroups()).then(() => renderGroups());
     }
   });
+
+  // Meeting time: save on blur so the callout updates without re-fetching on every keystroke
+  document.addEventListener('blur', (e) => {
+    const t = e.target;
+    if (t.dataset.action !== 'set-meeting-time') return;
+    updateGroup(t.dataset.group, { meeting_time: t.value.trim() || null })
+      .then(() => fetchMyGroups()).then(() => renderGroups());
+  }, true);
 
   document.getElementById('addGroupBtn').addEventListener('click', () => showGroupModal());
   document.getElementById('joinGroupBtn').addEventListener('click', () => showJoinDialog());
