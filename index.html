@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0a0518">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,7 +13,10 @@
 <title>EDC LV 2026 · Under the Electric Sky</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Russo+One&family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<!-- Brand display fonts: load opportunistically, fall back without re-paint -->
+<link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Russo+One&display=optional" rel="stylesheet">
+<!-- Body fonts: needed for legibility, swap when ready -->
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
 <style>
 :root {
   --bg-0: #050210;
@@ -317,13 +320,33 @@ header {
   border-left-color: var(--neon-pink);
 }
 .upnext-cell.leave-now {
-  background: linear-gradient(135deg, #ff6b1a38, #ff006e15);
+  background: linear-gradient(135deg, #ff6b1a50, #ff006e1c);
   border-color: var(--wL);
-  animation: leaveNowPulse 1.6s ease-in-out infinite;
+  border-left-width: 4px;
+  animation: leaveNowPulse 1.2s ease-in-out infinite;
 }
+.upnext-cell.leave-now .upnext-artist { font-size: 14.5px; }
+.upnext-cell.leave-now .upnext-countdown { font-size: 15px; font-weight: 700; }
 @keyframes leaveNowPulse {
-  0%, 100% { box-shadow: 0 0 0 0 #ff6b1a60; }
-  50% { box-shadow: 0 0 0 6px #ff6b1a00; }
+  0%, 100% { box-shadow: 0 0 0 0 #ff6b1a80, 0 0 18px #ff6b1a40; }
+  50%      { box-shadow: 0 0 0 8px #ff6b1a00, 0 0 28px #ff6b1a60; }
+}
+
+/* When LEAVE NOW is active anywhere in the bar, dim/freeze the other pulses
+   so the critical signal isn't competing with NOW/LIVE indicators. */
+.upnext-bar:has(.leave-now) .upnext-cell.now {
+  animation: none;
+  opacity: 0.45;
+  filter: saturate(0.6);
+}
+.upnext-bar:has(.leave-now) .upnext-cell.now .upnext-tag::before {
+  animation: none;
+  background: var(--ink-mute);
+  box-shadow: none;
+}
+.upnext-bar:has(.leave-now) .upnext-status .live-dot {
+  animation: none;
+  opacity: 0.35;
 }
 
 .upnext-tag {
@@ -3018,10 +3041,31 @@ main {
 <script src="./app.js"></script>
 
 <script>
-  // Register service worker for offline support
+  // Register service worker for offline support + hotfix propagation
   if ('serviceWorker' in navigator) {
+    let _swRefreshing = false;
+    const _hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swRefreshing || !_hadController) return;
+      _swRefreshing = true;
+      window.location.reload();
+    });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW register failed:', err));
+      navigator.serviceWorker.register('/sw.js').then(reg => {
+        // Force a check whenever the tab returns to focus (catches hotfixes fast)
+        const checkUpdate = () => reg.update().catch(() => {});
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) checkUpdate(); });
+        // If a new SW is waiting, ask it to take over immediately
+        const promote = (sw) => sw && sw.postMessage && sw.postMessage('SKIP_WAITING');
+        if (reg.waiting) promote(reg.waiting);
+        reg.addEventListener('updatefound', () => {
+          const sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', () => {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) promote(sw);
+          });
+        });
+      }).catch(err => console.warn('SW register failed:', err));
     });
   }
   // Online/offline indicator

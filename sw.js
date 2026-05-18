@@ -6,7 +6,7 @@
    - Supabase REST/Realtime: network-only (live data, must not be cached).
 */
 
-const VERSION = 'edc-lv-2026-v3';
+const VERSION = 'edc-lv-2026-v4';
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 

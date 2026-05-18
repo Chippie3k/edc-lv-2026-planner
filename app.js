@@ -525,9 +525,16 @@ function saveLocal() {
       currentDay: state.currentDay, activeStages: state.activeStages, picks: state.picks,
       mapImage: state.mapImage, mapImageDims: state.mapImageDims,
       stagePositions: state.stagePositions, mapLayers: state.mapLayers,
+      notifyPref: state.notifyPref, notified: state.notified,
     };
     localStorage.setItem(LOCAL_KEY, JSON.stringify(toSave));
-  } catch(e){}
+  } catch(e) {
+    // localStorage quota or private-mode rejection. Toast once so the user knows state isn't sticking.
+    if (!state._quotaWarned) {
+      state._quotaWarned = true;
+      try { toast('Storage full — picks may not persist', 'err'); } catch(_) {}
+    }
+  }
 }
 function loadLocal() {
   try {
@@ -556,21 +563,45 @@ function makeSetId(day, stage, start) { return `d${day}-${stage}-${start}`; }
 function isCeremony(name) { return CEREMONY_KEYWORDS.some(k => name.includes(k)); }
 function isHeadliner(name) { return HEADLINERS.has(name); }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// All festival timing locked to Las Vegas (America/Los_Angeles) regardless of user's TZ.
+// Otherwise a user opening the app from a different timezone sees wrong "NOW PLAYING",
+// wrong reminder windows, and wrong LEAVE NOW warnings.
+function nowPacific() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const p = Object.fromEntries(parts.map(x => [x.type, x.value]));
+    return {
+      year: parseInt(p.year),
+      month: parseInt(p.month), // 1-indexed
+      day: parseInt(p.day),
+      hour: (parseInt(p.hour) === 24 ? 0 : parseInt(p.hour)),
+      minute: parseInt(p.minute),
+    };
+  } catch (_) {
+    // Fallback to local time if Intl.DateTimeFormat fails (very old browsers)
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes() };
+  }
+}
 function nowMinutes() {
-  const d = new Date(); const h = d.getHours(), m = d.getMinutes();
-  if (h >= 12) return h * 60 + m;
-  return (h + 24) * 60 + m;
+  const p = nowPacific();
+  if (p.hour >= 12) return p.hour * 60 + p.minute;
+  return (p.hour + 24) * 60 + p.minute;
 }
 function todayDay() {
-  const now = new Date();
-  const y = now.getFullYear(), mo = now.getMonth(), d = now.getDate(), h = now.getHours();
-  if (y === 2026 && mo === 4) {
-    if (d === 15 && h >= 12) return 1;
-    if (d === 16 && h < 12) return 1;
-    if (d === 16 && h >= 12) return 2;
-    if (d === 17 && h < 12) return 2;
-    if (d === 17 && h >= 12) return 3;
-    if (d === 18 && h < 12) return 3;
+  const p = nowPacific();
+  // Festival is May 15–17, 2026 (Pacific). Rollover at noon since sets run to ~5:30 AM.
+  if (p.year === 2026 && p.month === 5) {
+    if (p.day === 15 && p.hour >= 12) return 1;
+    if (p.day === 16 && p.hour < 12) return 1;
+    if (p.day === 16 && p.hour >= 12) return 2;
+    if (p.day === 17 && p.hour < 12) return 2;
+    if (p.day === 17 && p.hour >= 12) return 3;
+    if (p.day === 18 && p.hour < 12) return 3;
   }
   return TODAY_DAY;
 }
@@ -593,6 +624,16 @@ function genJoinCode() {
 }
 
 // ===== LIVE PLANNER (Up Next + LEAVE NOW + Festival Countdown + Reminders) =====
+
+let _lastLeaveNowId = null;
+function pulseHapticIfNew(leaveCellId) {
+  if (!leaveCellId) { _lastLeaveNowId = null; return; }
+  if (leaveCellId === _lastLeaveNowId) return;
+  _lastLeaveNowId = leaveCellId;
+  // First transition into LEAVE NOW for this pick — buzz the phone
+  try { navigator.vibrate?.([80, 60, 120]); } catch (_) {}
+}
+
 
 function festivalStatus() {
   const day = todayDay();
@@ -705,6 +746,10 @@ function renderUpNext() {
     });
     prevStage = p.stage;
   }
+
+  // Haptic on transition into LEAVE NOW for a given pick
+  const leaveCell = cells.find(c => c.leaveNow);
+  pulseHapticIfNew(leaveCell ? leaveCell.pick.id : null);
 
   stripEl.innerHTML = cells.map((c, i) => {
     const meta = STAGES[c.pick.stage];
@@ -1175,12 +1220,9 @@ function wireOnboarding() {
     }
   });
 
-  // Share/done
-  document.getElementById('shareJoinCode').addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(document.getElementById('shareJoinCode').textContent);
-      toast('Code copied!');
-    } catch(e) {}
+  // Share/done — use native share sheet when available
+  document.getElementById('shareJoinCode').addEventListener('click', () => {
+    shareCrewCode(document.getElementById('shareJoinCode').textContent);
   });
   document.getElementById('onboardDone').addEventListener('click', () => {
     hideOnboard();
@@ -1603,6 +1645,21 @@ async function saveGroupFromModal() {
   }
 }
 
+// Share crew code via native share sheet (Messages/WhatsApp/etc), with clipboard fallback
+function shareCrewCode(code) {
+  const g = state.groups.find(x => x.join_code === code);
+  const crewName = g?.name || 'EDC crew';
+  const url = location.origin;
+  const text = `Join "${crewName}" on EDC LV 26 — code: ${code}\n${url}`;
+  if (navigator.share) {
+    navigator.share({ title: `Join ${crewName} on EDC LV 26`, text, url }).catch(() => {});
+  } else if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => toast('Code copied!')).catch(() => {});
+  } else {
+    toast('Code: ' + code);
+  }
+}
+
 // ===== JOIN OTHERS DIALOG (from Groups tab) =====
 function showJoinDialog() {
   state._joinFromApp = true;
@@ -1975,7 +2032,12 @@ function toggleStage(stage) {
   renderSchedule();
   saveLocal();
 }
+// In-flight guard prevents rapid double-taps from fanning out duplicate writes
+// across N crews in parallel and racing with realtime echoes.
+const _pickInFlight = new Set();
 function togglePick(id) {
+  if (_pickInFlight.has(id)) return;
+  _pickInFlight.add(id);
   const picked = !state.picks[id];
   if (picked) state.picks[id] = true; else delete state.picks[id];
   // When unpicked, clear any cached notify state so a future pick can re-fire
@@ -1984,10 +2046,14 @@ function togglePick(id) {
   renderSchedule();
   renderUpNext();
   if (state.currentTab === 'picks') renderPicks();
-  syncPickToCrews(id, picked).then(() => fetchMyGroups()).then(() => {
-    if (state.currentTab === 'groups') renderGroups();
-    if (state.currentTab === 'schedule') renderSchedule();
-  }).catch(err => console.warn('crew sync failed', err));
+  syncPickToCrews(id, picked)
+    .then(() => fetchMyGroups())
+    .then(() => {
+      if (state.currentTab === 'groups') renderGroups();
+      if (state.currentTab === 'schedule') renderSchedule();
+    })
+    .catch(err => console.warn('crew sync failed', err))
+    .finally(() => _pickInFlight.delete(id));
 }
 
 // ===== EVENT WIRING =====
@@ -2011,7 +2077,7 @@ function wireEvents() {
       return;
     }
     if (a === 'copy-code') {
-      navigator.clipboard?.writeText(t.dataset.code).then(() => toast('Code copied!')).catch(() => {});
+      shareCrewCode(t.dataset.code);
       return;
     }
     if (a === 'toggle-compare') {
