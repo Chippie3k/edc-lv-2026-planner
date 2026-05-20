@@ -834,33 +834,97 @@ function toast(msg, type) {
 }
 
 // ===== SUPABASE OPS =====
-async function fetchAllGroups() {
-  const { data, error } = await sb.from('edc_groups').select('*').order('created_at', { ascending: false }).limit(200);
+function isLeader(group) {
+  return !!(group && group.created_by && state.user?.name && group.created_by === state.user.name);
+}
+
+// Browse list deliberately omits join_code — only the leader's own card shows it.
+async function fetchBrowseGroups() {
+  const { data, error } = await sb.from('edc_groups')
+    .select('id, name, color, created_by, created_at')
+    .order('created_at', { ascending: false }).limit(200);
   if (error) { console.error(error); return []; }
   return data || [];
 }
+// Back-compat alias (onboarding still calls fetchAllGroups)
+const fetchAllGroups = fetchBrowseGroups;
 
 async function fetchMyGroups() {
   if (!state.myGroupIds.length) { state.groups = []; return []; }
-  const [g, m, p] = await Promise.all([
+  const [g, m, p, r] = await Promise.all([
     sb.from('edc_groups').select('*').in('id', state.myGroupIds),
     sb.from('edc_group_members').select('*').in('group_id', state.myGroupIds),
     sb.from('edc_group_picks').select('*').in('group_id', state.myGroupIds),
+    sb.from('edc_join_requests').select('*').in('group_id', state.myGroupIds).eq('status', 'pending'),
   ]);
-  if (g.error || m.error || p.error) {
-    console.error(g.error || m.error || p.error);
-    return state.groups;
-  }
+  // Resilient: only bail if the core groups query failed. Tolerate partial failures
+  // on the others (bad signal at the festival shouldn't blank the whole UI).
+  if (g.error) { console.error(g.error); return state.groups; }
+  const members = m.data || [];
+  const picks = p.data || [];
+  const reqs = r.data || [];
   const groups = (g.data || []).map(grp => ({
     ...grp,
-    members: (m.data || []).filter(x => x.group_id === grp.id).sort((a,b) => new Date(a.joined_at) - new Date(b.joined_at)),
-    picks: (p.data || []).filter(x => x.group_id === grp.id),
+    members: members.filter(x => x.group_id === grp.id).sort((a,b) => new Date(a.joined_at) - new Date(b.joined_at)),
+    picks: picks.filter(x => x.group_id === grp.id),
+    requests: reqs.filter(x => x.group_id === grp.id),
   }));
   state.groups = groups;
-  // Prune myGroupIds for any that were deleted
   state.myGroupIds = state.myGroupIds.filter(id => groups.some(g => g.id === id));
   saveLocal();
   return groups;
+}
+
+// Fetch my OUTGOING requests and reconcile any that were approved into my crews.
+async function refreshRequests() {
+  if (!state.user?.name) { state.myRequests = []; return false; }
+  const { data, error } = await sb.from('edc_join_requests').select('*').eq('requester_name', state.user.name);
+  if (error) { console.warn('request fetch failed', error); return false; }
+  state.myRequests = data || [];
+  let grew = false;
+  for (const req of state.myRequests) {
+    if (req.status === 'approved' && !state.myGroupIds.includes(req.group_id)) {
+      state.myGroupIds.push(req.group_id);
+      grew = true;
+      pushMyPicksToGroup(req.group_id).catch(() => {});
+    }
+  }
+  if (grew) { saveLocal(); toast("Request approved — you're in!"); }
+  return grew;
+}
+
+// One pass that keeps requests + crews + render in sync.
+async function syncAll() {
+  await refreshRequests();
+  await fetchMyGroups();
+  rerenderAll();
+}
+
+async function requestToJoin(groupId) {
+  if (!state.user?.name) return false;
+  if (state.myGroupIds.includes(groupId)) { toast('You’re already in this crew'); return false; }
+  const { error } = await sb.from('edc_join_requests').upsert(
+    { group_id: groupId, requester_name: state.user.name, status: 'pending', resolved_by: null, resolved_at: null },
+    { onConflict: 'group_id,requester_name' }
+  );
+  if (error) { toast(error.message || 'Request failed', 'err'); return false; }
+  await refreshRequests();
+  return true;
+}
+
+async function approveRequest(req) {
+  const { error: mErr } = await sb.from('edc_group_members').insert({ group_id: req.group_id, name: req.requester_name });
+  if (mErr && mErr.code !== '23505') { toast('Approve failed', 'err'); return; }
+  await sb.from('edc_join_requests').update({ status: 'approved', resolved_by: state.user.name, resolved_at: new Date().toISOString() }).eq('id', req.id);
+  await fetchMyGroups();
+  renderGroups();
+  toast(`${req.requester_name} added`);
+}
+
+async function denyRequest(req) {
+  await sb.from('edc_join_requests').update({ status: 'denied', resolved_by: state.user.name, resolved_at: new Date().toISOString() }).eq('id', req.id);
+  await fetchMyGroups();
+  renderGroups();
 }
 
 async function pushMyPicksToGroup(groupId) {
@@ -967,11 +1031,12 @@ function setupRealtime() {
     realtimeChannel = null;
   }
   realtimeStatus = 'subscribing';
-  const onChange = () => fetchMyGroups().then(rerenderAll).catch(e => console.warn('refresh failed', e));
+  const onChange = () => syncAll().catch(e => console.warn('refresh failed', e));
   realtimeChannel = sb.channel('edc-public')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_groups' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_members' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_group_picks' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'edc_join_requests' }, onChange)
     .subscribe((status, err) => {
       realtimeStatus = status === 'SUBSCRIBED' ? 'connected' : (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' ? 'error' : status.toLowerCase());
       if (err) console.warn('realtime error:', err);
@@ -984,16 +1049,15 @@ function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(() => {
     if (document.hidden) return;
-    if (!state.myGroupIds.length) return;
-    fetchMyGroups().then(rerenderAll).catch(() => {});
+    if (!state.myGroupIds.length && !(state.myRequests || []).length) return;
+    syncAll().catch(() => {});
   }, 18000);
 }
 
 function manualRefresh() {
   const btn = document.getElementById('refreshGroupsBtn');
   if (btn) btn.classList.add('spinning');
-  fetchMyGroups().then(() => {
-    rerenderAll();
+  syncAll().then(() => {
     toast('Synced');
   }).catch(() => {
     toast('Sync failed', 'err');
@@ -1037,12 +1101,10 @@ function jumpToPickInSchedule(setId) {
 
 // Refresh when tab becomes visible again
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && state.myGroupIds.length) {
-    fetchMyGroups().then(rerenderAll).catch(() => {});
-  }
+  if (!document.hidden && state.user?.name) syncAll().catch(() => {});
 });
 window.addEventListener('online', () => {
-  if (state.myGroupIds.length) fetchMyGroups().then(rerenderAll).catch(() => {});
+  if (state.user?.name) syncAll().catch(() => {});
 });
 
 // ===== ONBOARDING =====
@@ -1106,16 +1168,18 @@ function renderJoinList(groups) {
     el.innerHTML = '<div class="join-list-empty">No crews yet. Be the first — create one!</div>';
     return;
   }
-  el.innerHTML = available.slice(0, 20).map(g => `
-    <div class="join-list-item" data-join-id="${g.id}" style="--group-color:${g.color}">
+  const pendingIds = new Set((state.myRequests || []).filter(r => r.status === 'pending').map(r => r.group_id));
+  el.innerHTML = available.slice(0, 20).map(g => {
+    const pending = pendingIds.has(g.id);
+    return `<div class="join-list-item ${pending ? 'is-pending' : ''}" data-join-id="${g.id}" style="--group-color:${g.color}">
       <div class="ga">${escapeHtml((g.name[0] || '?').toUpperCase())}</div>
       <div>
         <div class="gn">${escapeHtml(g.name)}</div>
-        <div class="gm">Code: ${escapeHtml(g.join_code)}</div>
+        <div class="gm">${pending ? 'Request sent — waiting for approval' : 'Tap to request to join'}</div>
       </div>
-      <div class="arr">›</div>
-    </div>
-  `).join('');
+      <div class="arr">${pending ? '⏳' : 'Request'}</div>
+    </div>`;
+  }).join('');
 }
 
 function wireOnboarding() {
@@ -1188,19 +1252,18 @@ function wireOnboarding() {
     }
   });
 
-  // Join flow
+  // Join flow — browse list now sends a REQUEST (no instant join, no code shown)
   document.getElementById('joinList').addEventListener('click', async (e) => {
     const item = e.target.closest('[data-join-id]');
     if (!item) return;
     const id = item.dataset.joinId;
-    try {
-      const g = await joinGroupById(id);
-      await fetchMyGroups();
-      document.getElementById('shareGroupName').textContent = g.name;
-      document.getElementById('shareJoinCode').textContent = g.join_code;
-      showOnboard('share');
-    } catch(err) {
-      toast(err.message || 'Failed to join', 'err');
+    const ok = await requestToJoin(id);
+    if (ok) {
+      renderJoinList(await fetchAllGroups());
+      toast('Request sent — a member will approve you');
+      // Drop them into the app; the crew appears once approved (realtime)
+      hideOnboard();
+      initApp();
     }
   });
 
@@ -1212,9 +1275,10 @@ function wireOnboarding() {
     try {
       const g = await joinGroupByCode(joinCodeInput.value);
       await fetchMyGroups();
-      document.getElementById('shareGroupName').textContent = g.name;
-      document.getElementById('shareJoinCode').textContent = g.join_code;
-      showOnboard('share');
+      // Joined as a member (not leader) — drop straight into the app, don't prompt to re-share the code.
+      toast(`You're in ${g.name}!`);
+      hideOnboard();
+      initApp();
     } catch(err) {
       toast(err.message || 'Failed to join', 'err');
     }
@@ -1526,15 +1590,23 @@ function renderCompareForGroup(g) {
 
 function renderGroups() {
   const list = document.getElementById('groupsList');
+
+  // Outgoing requests the user is still waiting on (crews they're not in yet)
+  const pending = (state.myRequests || []).filter(r => r.status === 'pending' && !state.myGroupIds.includes(r.group_id));
+  const pendingHtml = pending.length ? `<div class="pending-requests-card">
+    <div class="pending-requests-label">⏳ ${pending.length} PENDING REQUEST${pending.length === 1 ? '' : 'S'}</div>
+    <div class="pending-requests-sub">Waiting for a crew member to approve you. You'll be added automatically.</div>
+  </div>` : '';
+
   if (!state.groups.length) {
-    list.innerHTML = `<div class="empty-groups">
-      <p>No crews yet. Create one for your bass heads, your trance trance fam — whatever. Share the code, get them in.</p>
+    list.innerHTML = pendingHtml + `<div class="empty-groups">
+      <p>No crews yet. Create one for your bass heads, your trance fam — whatever. You hold the code; friends join with it or request to join.</p>
       <button class="btn-primary" id="emptyCreateBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> CREATE A CREW</button>
     </div>`;
     document.getElementById('emptyCreateBtn')?.addEventListener('click', () => showGroupModal());
     return;
   }
-  list.innerHTML = state.groups.map(g => {
+  list.innerHTML = pendingHtml + state.groups.map(g => {
     // Count UNIQUE sets picked across all crew members
     const uniqueSetCount = new Set((g.picks || []).map(p => p.set_id)).size;
     const expanded = state._expandedCompare === g.id;
@@ -1557,13 +1629,25 @@ function renderGroups() {
         </div>
       </div>
       <div class="group-identity">
-        <button class="join-code-pill" data-action="copy-code" data-code="${escapeHtml(g.join_code)}" aria-label="Copy join code ${escapeHtml(g.join_code)}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          ${escapeHtml(g.join_code)}
-        </button>
+        ${isLeader(g)
+          ? `<button class="join-code-pill" data-action="copy-code" data-code="${escapeHtml(g.join_code)}" aria-label="Share join code ${escapeHtml(g.join_code)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+              SHARE CODE · ${escapeHtml(g.join_code)}
+            </button>`
+          : `<div class="code-hint">🔒 Only ${escapeHtml(g.created_by || 'the leader')} can share the code · friends can request to join from <strong>Join</strong></div>`}
         <div class="group-members">
-          ${g.members.map(m => `<div class="member-chip ${m.name === state.user?.name ? 'is-me' : ''}"><div class="mdot" aria-hidden="true"></div>${escapeHtml(m.name)}</div>`).join('')}
+          ${g.members.map(m => `<div class="member-chip ${m.name === state.user?.name ? 'is-me' : ''} ${m.name === g.created_by ? 'is-leader' : ''}"><div class="mdot" aria-hidden="true"></div>${escapeHtml(m.name)}</div>`).join('')}
         </div>
+        ${(g.requests && g.requests.length) ? `<div class="join-requests">
+          <div class="join-requests-label">${g.requests.length} REQUEST${g.requests.length === 1 ? '' : 'S'} TO JOIN</div>
+          ${g.requests.map(req => `<div class="join-request-row">
+            <span class="jr-name">${escapeHtml(req.requester_name)}</span>
+            <div class="jr-actions">
+              <button class="jr-approve" data-action="approve-request" data-id="${req.id}" aria-label="Approve ${escapeHtml(req.requester_name)}">✓ ADD</button>
+              <button class="jr-deny" data-action="deny-request" data-id="${req.id}" aria-label="Deny ${escapeHtml(req.requester_name)}">✕</button>
+            </div>
+          </div>`).join('')}
+        </div>` : ''}
       </div>
       <div class="group-meeting">
         <div class="group-meeting-label">Meet Times</div>
@@ -2085,6 +2169,13 @@ function wireEvents() {
       renderGroups();
       return;
     }
+    if (a === 'approve-request' || a === 'deny-request') {
+      const reqId = t.dataset.id;
+      let req = null;
+      for (const g of state.groups) { req = (g.requests || []).find(r => r.id === reqId); if (req) break; }
+      if (req) (a === 'approve-request' ? approveRequest(req) : denyRequest(req));
+      return;
+    }
     if (a === 'toggle-meet-rsvp') {
       toggleMeetRsvp(t.dataset.id);
       renderGroups();
@@ -2327,6 +2418,7 @@ async function renderPlatformSection() {
 
 // ===== INIT =====
 async function initApp() {
+  await refreshRequests();
   await fetchMyGroups();
   setupRealtime();
   renderStageFilters();
